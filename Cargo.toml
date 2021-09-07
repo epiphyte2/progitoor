@@ -1,0 +1,14 @@
+# Copyright 2021 Edwin Peer and Simeon Miteff
+
+[package]
+name = "progitoor"
+version = "0.1.0"
+edition = "2018"
+license = "GPL-3.0"
+authors = ["Edwin Peer <edwin@epiphyte2.co>", "Simeon Miteff <simeon@epiphyte2.co>" ]
+readme = "README.md"
+# repository = "https://github.com/"
+# documentation = "https://docs.rs/"
+# description = ""
+# keywords = []
+# categories = ["command-line-utilities"]
