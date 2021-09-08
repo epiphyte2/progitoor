@@ -3,87 +3,320 @@
 extern crate time;
 
 pub mod metadata {
+    use std::borrow::Borrow;
     use std::collections::HashMap;
+    use std::convert::TryFrom;
     use std::ffi::{OsStr, OsString};
+    use std::fs;
+    use std::fs::{File, OpenOptions};
+    use std::io::prelude::*;
+    use std::io::{BufReader, LineWriter};
+    use std::path::{Path, PathBuf};
+    use thiserror::Error;
     use time::Timespec;
 
+    #[derive(Error, Debug)]
+    pub enum MetadataError {
+        #[error("Error parsing FileInfo record from string")]
+        FileInfoParsingError,
+
+        #[error("Generic error")]
+        GenericError,
+
+        #[error(transparent)]
+        IOError(#[from] std::io::Error),
+        #[error(transparent)]
+        ParseIntError(#[from] std::num::ParseIntError),
+    }
+
+    /// FileInfo tracks file attributes progitoor is going to remap
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct FileInfo {
         pub time: Timespec,
-        pub perm: u16,
+        pub mode: u16,
         pub uid: u32,
         pub gid: u32,
     }
 
+    /// FileEntry is a name, info tuple
+    pub struct FileEntry {
+        pub name: PathBuf,
+        pub info: FileInfo,
+    }
+
+    /// Serialise a FileEntry to a String
+    impl Into<String> for &FileEntry {
+        fn into(self) -> String {
+            format!(
+                "{:04x} {:04x} {:04x} {:09x} {:08x} {}",
+                self.info.mode,
+                self.info.uid,
+                self.info.gid,
+                self.info.time.sec,
+                self.info.time.nsec,
+                self.name.to_str().unwrap(), // FIXME this might be a bad idea
+            )
+        }
+    }
+
+    /// De-serialise a FileEntry from a String
+    impl TryFrom<&str> for FileEntry {
+        type Error = MetadataError;
+
+        fn try_from(value: &str) -> Result<Self, Self::Error> {
+            // Format:
+            // <mode> <uid> <gid> <sec> <nsec> <filename>
+            // All fields but last are integers are hex lowercase,
+            // no 0x prefix, padding with 4, 4, 4, 9, 8 digits each.
+
+            let parts: Vec<&str> = value.splitn(6, " ").collect();
+            if parts.len() != 6 {
+                // FIXME: improve error
+                return Err(MetadataError::FileInfoParsingError);
+            }
+
+            Ok(FileEntry {
+                name: parts[5].parse().unwrap(),
+                info: FileInfo {
+                    mode: u16::from_str_radix(parts[0], 16)?,
+                    uid: u32::from_str_radix(parts[1], 16)?,
+                    gid: u32::from_str_radix(parts[2], 16)?,
+                    time: Timespec {
+                        sec: i64::from_str_radix(parts[3], 16)?,
+                        nsec: i32::from_str_radix(parts[4], 16)?,
+                    },
+                },
+            })
+        }
+    }
+
+    /// Store is a file metadata store to support progitoor mapping
     pub struct Store {
-        map: HashMap<OsString, FileInfo>,
+        // private stuff forces the use of Store::new() to construct
+        map: HashMap<PathBuf, FileInfo>,
+        path_db: PathBuf,
+        path_journal: PathBuf,
     }
 
     impl Store {
-        pub fn new() -> Store {
-            Store {
-                map: HashMap::new(),
+        /// Construct a new Store instance
+        pub fn new(base_dir: &Path) -> Result<Self, MetadataError> {
+            if !base_dir.is_dir() {
+                // TODO: improve error
+                return Err(MetadataError::GenericError);
             }
+
+            // FIXME: move filenames into const at the top of the module
+            let mut store = Self {
+                map: HashMap::new(),
+                path_db: base_dir.join(".progitoor"),
+                path_journal: base_dir.join(".progitoor_"),
+            };
+
+            Store::load_file(&mut store.map, &store.path_db)?;
+
+            if store.path_journal.exists() {
+                Store::load_file(&mut store.map, &store.path_journal)?;
+                store.flush(); // write db + delete journal
+            }
+
+            // TODO: start thread to periodically call flush()
+
+            Ok(store)
         }
 
-        pub fn get(&self, name: &OsStr) -> Option<&FileInfo> {
-            return self.map.get(&*name.to_os_string());
+        /// load_file is used for loading both the db and journal
+        fn load_file(
+            map: &mut HashMap<PathBuf, FileInfo>,
+            path: &Path,
+        ) -> Result<(), std::io::Error> {
+            if path.exists() {
+                let file_db = OpenOptions::new().read(true).open(path)?;
+                let reader = BufReader::new(file_db);
+                for res in reader.lines() {
+                    match res {
+                        Ok(line) => {
+                            if let Ok(parse) = FileEntry::try_from(&*line) {
+                                map.entry(parse.name.clone())
+                                    .and_modify(|v| *v = parse.info)
+                                    .or_insert(parse.info);
+                            } else {
+                                panic!("failed to parse line"); // FIXME: don't panic, return error instead
+                            }
+                        }
+                        Err(e) => {
+                            panic!("failed to read line: {}", e); // FIXME: don't panic, return error instead
+                        }
+                    }
+                }
+            }
+
+            Ok(())
         }
 
-        pub fn set(&mut self, name: &OsStr, info: FileInfo) {
-            *self.map.entry(name.to_os_string()).or_insert(info) = info;
+        /// Look up file metadata
+        pub fn get(&self, name: &Path) -> Option<&FileInfo> {
+            return self.map.get(&name.to_path_buf());
         }
 
-        pub fn remove(&mut self, name: &OsStr) {
+        /// Persist file metadata
+        pub fn set(&mut self, name: &Path, info: FileInfo) -> Result<(), MetadataError> {
+            self.map
+                .entry(name.to_path_buf())
+                .and_modify(|v| *v = info)
+                .or_insert(info);
+
+            let entry = FileEntry {
+                name: name.to_path_buf(),
+                info,
+            };
+            self.journal(&entry)?;
+
+            Ok(())
+        }
+
+        /// Delete file metadata
+        pub fn remove(&mut self, name: &Path) {
             self.map.remove(name);
+
+            // TODO: how do we prevent entries being undeleted due to journal replay?
         }
 
-        // fn flush(&mut self) {
-        //
-        // }
-        //
-        // fn drop(&mut self) {
-        //
-        // }
+        /// journal appends a FileEntry to the journal file and does a fsync
+        fn journal(&mut self, entry: &FileEntry) -> Result<(), MetadataError> {
+            let mut line: String = entry.into();
+            line += "\n";
+
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path_journal)?;
+
+            let mut writer = LineWriter::new(&file);
+
+            // Note: LineWriter should flush() here because of the newline
+            writer.write_all(line.as_ref())?;
+
+            file.sync_all()?;
+
+            Ok(())
+        }
+
+        /// flush writes the in-memory database to disk and closes/deletes the journal
+        fn flush(&mut self) -> Result<(), std::io::Error> {
+            // Create or open database
+            let mut file_db;
+            if self.path_db.exists() {
+                file_db = OpenOptions::new().write(true).open(&self.path_db)?;
+            } else {
+                file_db = File::create(&self.path_db)?;
+            }
+
+            // Dump map to database
+            for (k, v) in &self.map {
+                let entry = FileEntry {
+                    name: k.to_path_buf(),
+                    info: *v,
+                };
+                let mut line: String = entry.borrow().into();
+                line += "\n";
+
+                file_db.write_all(line.as_ref())?;
+            }
+
+            // Delete journal
+            fs::remove_file(&self.path_journal)?;
+
+            Ok(())
+        }
+    }
+
+    /// Call flush on dropping Store instances
+    impl Drop for Store {
+        fn drop(&mut self) {
+            self.flush();
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::metadata::{FileInfo, Store};
+    use super::metadata::{FileEntry, FileInfo, Store};
+    use std::convert::TryFrom;
     use std::ffi::OsStr;
+    use std::path::Path;
     use time::Timespec;
 
     #[test]
-    fn basic_metadata_test() {
+    fn basic_store_test() {
         let f1 = FileInfo {
             time: Timespec { sec: 1, nsec: 1 },
-            perm: 1,
+            mode: 1,
             uid: 1,
             gid: 1,
         };
         let f2 = FileInfo {
             time: Timespec { sec: 2, nsec: 2 },
-            perm: 2,
+            mode: 2,
             uid: 2,
             gid: 2,
         };
 
-        let mut s = Store::new();
+        let mut s = Store::new(Path::new("/tmp")).unwrap();
 
-        assert!(s.get(OsStr::new("/non-existent")).is_none());
+        assert!(s.get(Path::new("/non-existent")).is_none());
 
-        s.set(OsStr::new("/f1"), f1);
-        s.set(OsStr::new("/f2"), f2);
+        s.set(Path::new("/f1"), f1);
+        s.set(Path::new("/f2"), f2);
 
-        let gf1 = s.get(OsStr::new("/f1")).unwrap();
-        let gf2 = s.get(OsStr::new("/f2")).unwrap();
+        let gf1 = s.get(Path::new("/f1")).unwrap();
+        let gf2 = s.get(Path::new("/f2")).unwrap();
 
         assert_eq!(f1, *gf1);
         assert_eq!(f2, *gf2);
 
-        s.remove(OsStr::new("/f1"));
+        s.remove(Path::new("/f1"));
 
-        assert!(s.get(OsStr::new("/f1")).is_none());
+        assert!(s.get(Path::new("/f1")).is_none());
+    }
+
+    #[test]
+    fn fileentry_deserialisation_test() {
+        let good = FileEntry::try_from("01a4 0000 0000 0613ab659 00000000 /etc/passwd").unwrap();
+        assert_eq!(good.info.mode, 0o644);
+        assert_eq!(good.info.uid, 0);
+        assert_eq!(good.info.gid, 0);
+        assert_eq!(
+            good.info.time,
+            Timespec {
+                sec: 1631237721,
+                nsec: 0
+            }
+        );
+        assert_eq!(good.name, Path::new("/etc/passwd"));
+
+        // FIXME: write tests for error cases
+    }
+
+    #[test]
+    fn fileentry_serialisation_test() {
+        let model = &FileEntry {
+            name: "/etc/passwd".parse().unwrap(),
+            info: FileInfo {
+                time: Timespec {
+                    sec: 1631237721,
+                    nsec: 0,
+                },
+                mode: 0o644,
+                uid: 0,
+                gid: 0,
+            },
+        };
+
+        let good: String = model.into();
+
+        assert_eq!(good, "01a4 0000 0000 0613ab659 00000000 /etc/passwd")
+
+        // FIXME: write tests for error cases
     }
 }
