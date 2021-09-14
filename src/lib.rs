@@ -6,23 +6,26 @@ pub mod metadata {
     use std::borrow::Borrow;
     use std::collections::HashMap;
     use std::convert::TryFrom;
-    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::fs::{File, OpenOptions};
     use std::io::prelude::*;
     use std::io::{BufReader, LineWriter};
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, RwLock};
     use thiserror::Error;
     use time::Timespec;
 
+    static FILENAME_JOURNAL: &str = ".progitoor_";
+    static FILENAME_DB: &str = ".progitoor";
+
+    /// MetadataError is the general error type for the metadata module
     #[derive(Error, Debug)]
     pub enum MetadataError {
         #[error("Error parsing FileInfo record from string")]
         FileInfoParsingError,
-
-        #[error("Generic error")]
-        GenericError,
-
+        #[error("Metadata store path [{0:?}] is not a directory")]
+        InvalidMetadataStorePathError(PathBuf),
         #[error(transparent)]
         IOError(#[from] std::io::Error),
         #[error(transparent)]
@@ -51,6 +54,8 @@ pub mod metadata {
         pub name: PathBuf,
         pub info: FileInfo,
     }
+
+    // FIXME: clippy says: an implementation of `From` is preferred since it gives you `Into<_>` for free where the reverse isn't true
 
     /// Serialise a FileEntry to a String
     impl Into<String> for &FileEntry {
@@ -101,70 +106,100 @@ pub mod metadata {
         }
     }
 
+    /// MtMap is a type alias for the heavily wrapped HashMap
+    type MtMap = Arc<RwLock<HashMap<PathBuf, FileInfo>>>;
+
     /// Store is a file metadata store to support progitoor mapping
     pub struct Store {
-        // private stuff forces the use of Store::new() to construct
-        map: HashMap<PathBuf, FileInfo>,
+        map: MtMap,
         path_db: PathBuf,
         path_journal: PathBuf,
+        flusher_thread_run: Arc<AtomicBool>,
     }
 
     impl Store {
         /// Construct a new Store instance
         pub fn new(base_dir: &Path) -> Result<Self, MetadataError> {
+            match Self::new_without_flusher_thread(base_dir) {
+                Ok(store) => {
+                    store.start_flusher_thread();
+                    Ok(store)
+                }
+                Err(e) => Err(e),
+            }
+        }
+
+        /// Construct a Store instance that doesn't start a periodic flusher thread
+        pub fn new_without_flusher_thread(base_dir: &Path) -> Result<Self, MetadataError> {
             if !base_dir.is_dir() {
-                // TODO: improve error
-                return Err(MetadataError::GenericError);
+                return Err(MetadataError::InvalidMetadataStorePathError(
+                    base_dir.to_path_buf(),
+                ));
             }
 
-            // FIXME: move filenames into const at the top of the module
             let mut store = Self {
-                map: HashMap::new(),
-                path_db: base_dir.join(".progitoor"),
-                path_journal: base_dir.join(".progitoor_"),
+                map: Arc::new(RwLock::new(HashMap::new())),
+                path_db: base_dir.join(FILENAME_DB),
+                path_journal: base_dir.join(FILENAME_JOURNAL),
+                flusher_thread_run: Arc::new(AtomicBool::new(true)),
             };
 
             Store::load_file(&mut store.map, &store.path_db)?;
 
             if store.path_journal.exists() {
                 Store::load_file(&mut store.map, &store.path_journal)?;
-                store.flush(); // write db + delete journal
+                store
+                    .internal_flush()
+                    .expect("error during flush in metadata store constructor")
             }
-
-            // TODO: start thread to periodically call flush()
 
             Ok(store)
         }
 
+        /// Start the periodic flusher thread
+        fn start_flusher_thread(&self) {
+            let thread_map = Arc::clone(&self.map);
+            let thread_path_db = self.path_db.clone();
+            let thread_journal_db = self.path_journal.clone();
+            let thread_flag = self.flusher_thread_run.clone();
+
+            std::thread::spawn(move || {
+                while thread_flag.load(Ordering::SeqCst) {
+                    // TODO: make sleep configurable
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    Store::flush(&thread_map, &thread_path_db, &thread_journal_db)
+                        .expect("metadata store periodic flush thread failed");
+                }
+            });
+        }
+
         /// load_file is used for loading both the db and journal
-        fn load_file(
-            map: &mut HashMap<PathBuf, FileInfo>,
-            path: &Path,
-        ) -> Result<(), std::io::Error> {
+        fn load_file(map: &mut MtMap, path: &Path) -> Result<(), MetadataError> {
             if path.exists() {
                 let file_db = OpenOptions::new().read(true).open(path)?;
                 let reader = BufReader::new(file_db);
                 for res in reader.lines() {
                     match res {
                         Ok(line) => {
-                            if let Ok(parse) = FileEntry::try_from(&*line) {
-                                if parse.info.mode == 0 {
-                                    // Tombstone value
-                                    map.remove(parse.name.as_path());
+                            match FileEntry::try_from(&*line) {
+                                Ok(parse) => {
+                                    if parse.info.mode == 0 {
+                                        // Tombstone value
+                                        map.write().unwrap().remove(parse.name.as_path());
 
-                                    continue;
+                                        continue;
+                                    }
+
+                                    map.write()
+                                        .unwrap()
+                                        .entry(parse.name.clone())
+                                        .and_modify(|v| *v = parse.info)
+                                        .or_insert(parse.info);
                                 }
-
-                                map.entry(parse.name.clone())
-                                    .and_modify(|v| *v = parse.info)
-                                    .or_insert(parse.info);
-                            } else {
-                                panic!("failed to parse line"); // FIXME: don't panic, return error instead
+                                Err(e) => return Err(e),
                             }
                         }
-                        Err(e) => {
-                            panic!("failed to read line: {}", e); // FIXME: don't panic, return error instead
-                        }
+                        Err(e) => return Err(MetadataError::IOError(e)),
                     }
                 }
             }
@@ -173,13 +208,19 @@ pub mod metadata {
         }
 
         /// Look up file metadata
-        pub fn get(&self, name: &Path) -> Option<&FileInfo> {
-            return self.map.get(&name.to_path_buf());
+        pub fn get(&self, name: &Path) -> Option<FileInfo> {
+            if let Some(file_info_ref) = self.map.read().unwrap().get(&name.to_path_buf()) {
+                return Some(file_info_ref.clone());
+            }
+
+            None
         }
 
         /// Persist file metadata
         pub fn set(&mut self, name: &Path, info: FileInfo) -> Result<(), MetadataError> {
             self.map
+                .write()
+                .unwrap()
                 .entry(name.to_path_buf())
                 .and_modify(|v| *v = info)
                 .or_insert(info);
@@ -195,7 +236,7 @@ pub mod metadata {
 
         /// Delete file metadata
         pub fn remove(&mut self, name: &Path) -> Result<(), MetadataError> {
-            self.map.remove(name);
+            self.map.write().unwrap().remove(name);
 
             // Write tombstone value to journal
             let entry = FileEntry {
@@ -219,7 +260,7 @@ pub mod metadata {
 
             let mut writer = LineWriter::new(&file);
 
-            // Note: LineWriter should flush() here because of the newline
+            // Note: LineWriter will flush() here because of the newline
             writer.write_all(line.as_ref())?;
 
             file.sync_all()?;
@@ -228,17 +269,17 @@ pub mod metadata {
         }
 
         /// flush writes the in-memory database to disk and closes/deletes the journal
-        pub(crate) fn flush(&mut self) -> Result<(), std::io::Error> {
+        fn flush(map: &MtMap, path_db: &Path, path_journal: &Path) -> Result<(), MetadataError> {
             // Create or open database
             let mut file_db;
-            if self.path_db.exists() {
-                file_db = OpenOptions::new().write(true).open(&self.path_db)?;
+            if path_db.exists() {
+                file_db = OpenOptions::new().write(true).open(path_db)?;
             } else {
-                file_db = File::create(&self.path_db)?;
+                file_db = File::create(path_db)?;
             }
 
             // Dump map to database
-            for (k, v) in &self.map {
+            for (k, v) in map.read().unwrap().iter() {
                 let entry = FileEntry {
                     name: k.to_path_buf(),
                     info: *v,
@@ -250,16 +291,25 @@ pub mod metadata {
             }
 
             // Delete journal
-            fs::remove_file(&self.path_journal)?;
+            if path_journal.exists() {
+                fs::remove_file(path_journal)?;
+            }
 
             Ok(())
         }
+
+        /// Non-static version of flush()
+        pub(crate) fn internal_flush(&mut self) -> Result<(), MetadataError> {
+            Store::flush(&self.map, &self.path_db, &self.path_journal)
+        }
     }
 
-    /// Call flush on dropping Store instances
+    /// Clean up on dropping Store instances
     impl Drop for Store {
         fn drop(&mut self) {
-            self.flush();
+            self.flusher_thread_run.store(false, Ordering::SeqCst);
+            self.internal_flush()
+                .expect("failure during flush in metadata store drop");
         }
     }
 }
@@ -268,7 +318,6 @@ pub mod metadata {
 mod test {
     use super::metadata::{FileEntry, FileInfo, Store};
     use std::convert::TryFrom;
-    use std::ffi::OsStr;
     use std::fs::OpenOptions;
     use std::io::{BufRead, BufReader};
     use std::mem::forget;
@@ -320,16 +369,16 @@ mod test {
 
         assert!(s.get(Path::new("/non-existent")).is_none());
 
-        s.set(Path::new("/f1"), f1);
-        s.set(Path::new("/f2"), f2);
+        s.set(Path::new("/f1"), f1).expect("failed to set /f1");
+        s.set(Path::new("/f2"), f2).expect("failed to set /f2");
 
-        let gf1 = s.get(Path::new("/f1")).unwrap();
-        let gf2 = s.get(Path::new("/f2")).unwrap();
+        let gf1 = s.get(Path::new("/f1")).expect("failed to get /f1");
+        let gf2 = s.get(Path::new("/f2")).expect("failed to get /f2");
 
-        assert_eq!(f1, *gf1);
-        assert_eq!(f2, *gf2);
+        assert_eq!(f1, gf1);
+        assert_eq!(f2, gf2);
 
-        s.remove(Path::new("/f1"));
+        s.remove(Path::new("/f1")).expect("failed to remove /f1");
 
         assert!(s.get(Path::new("/f1")).is_none());
 
@@ -366,16 +415,18 @@ mod test {
         let db_file = db_file_pathbuf.as_path();
 
         {
-            let mut s = Store::new(dir.path()).unwrap();
-            s.set(Path::new("/f1"), f1);
-            s.flush(); // so we get a db on disk, with one entry
-            s.set(Path::new("/f2"), f2);
-            let gf1 = s.get(Path::new("/f1")).unwrap();
-            let gf2 = s.get(Path::new("/f2")).unwrap();
-            assert_eq!(f1, *gf1);
-            assert_eq!(f2, *gf2);
+            let mut s =
+                Store::new_without_flusher_thread(dir.path()).expect("failed to construct store");
 
-            s.remove(Path::new("/f1"));
+            s.set(Path::new("/f1"), f1).expect("failed to set /f1");
+            s.internal_flush().expect("failed to flush"); // so we get a db on disk, with one entry
+            s.set(Path::new("/f2"), f2).expect("failed to set /f2");
+            let gf1 = s.get(Path::new("/f1")).expect("failed to get /f1");
+            let gf2 = s.get(Path::new("/f2")).expect("failed to get /f2");
+            assert_eq!(f1, gf1);
+            assert_eq!(f2, gf2);
+
+            s.remove(Path::new("/f1")).expect("failed to remove /f1");
 
             forget(s); // Simulate crash
         }
@@ -384,13 +435,15 @@ mod test {
         dump_file(db_file);
 
         {
-            let mut s = Store::new(dir.path()).unwrap();
+            let s =
+                Store::new_without_flusher_thread(dir.path()).expect("failed to construct store");
 
             // After new() has run, the journal should have been replayed and deleted
             assert!(!journal_file.exists());
 
-            let gf2 = s.get(Path::new("/f2")).unwrap(); // Replayed from journal
-            assert_eq!(f2, *gf2);
+            // Replayed from journal
+            let gf2 = s.get(Path::new("/f2")).expect("failed to get /f2");
+            assert_eq!(f2, gf2);
 
             // First loaded from DB then deleted due to tombstone in journal
             assert!(s.get(Path::new("/f1")).is_none());
@@ -403,7 +456,8 @@ mod test {
 
     #[test]
     fn fileentry_deserialisation_test() {
-        let good = FileEntry::try_from("01a4 0000 0000 0613ab659 00000000 /etc/passwd").unwrap();
+        let good = FileEntry::try_from("01a4 0000 0000 0613ab659 00000000 /etc/passwd")
+            .expect("failed to parse db string");
         assert_eq!(good.info.mode, 0o644);
         assert_eq!(good.info.uid, 0);
         assert_eq!(good.info.gid, 0);
@@ -422,7 +476,7 @@ mod test {
     #[test]
     fn fileentry_serialisation_test() {
         let model = &FileEntry {
-            name: "/etc/passwd".parse().unwrap(),
+            name: "/etc/passwd".parse().expect("failed to create db string"),
             info: FileInfo {
                 time: Timespec {
                     sec: 1631237721,
