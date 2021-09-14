@@ -38,6 +38,14 @@ pub mod metadata {
         pub gid: u32,
     }
 
+    /// ZERO_FILE_INFO is used to write tombstones to the journal
+    const ZERO_FILE_INFO: FileInfo = FileInfo {
+        time: Timespec { sec: 0, nsec: 0 },
+        mode: 0,
+        uid: 0,
+        gid: 0,
+    };
+
     /// FileEntry is a name, info tuple
     pub struct FileEntry {
         pub name: PathBuf,
@@ -64,14 +72,17 @@ pub mod metadata {
         type Error = MetadataError;
 
         fn try_from(value: &str) -> Result<Self, Self::Error> {
-            // Format:
+            // DB/Journal file format:
+            // ======================
             // <mode> <uid> <gid> <sec> <nsec> <filename>
+            //
             // All fields but last are integers are hex lowercase,
-            // no 0x prefix, padding with 4, 4, 4, 9, 8 digits each.
+            // no 0x prefix, padding to {4, 4, 4, 9, 8} digits each.
+            //
+            // In the journal, if <mode> is 0000 - it is a tombstone.
 
             let parts: Vec<&str> = value.splitn(6, " ").collect();
             if parts.len() != 6 {
-                // FIXME: improve error
                 return Err(MetadataError::FileInfoParsingError);
             }
 
@@ -137,6 +148,13 @@ pub mod metadata {
                     match res {
                         Ok(line) => {
                             if let Ok(parse) = FileEntry::try_from(&*line) {
+                                if parse.info.mode == 0 {
+                                    // Tombstone value
+                                    map.remove(parse.name.as_path());
+
+                                    continue;
+                                }
+
                                 map.entry(parse.name.clone())
                                     .and_modify(|v| *v = parse.info)
                                     .or_insert(parse.info);
@@ -176,10 +194,17 @@ pub mod metadata {
         }
 
         /// Delete file metadata
-        pub fn remove(&mut self, name: &Path) {
+        pub fn remove(&mut self, name: &Path) -> Result<(), MetadataError> {
             self.map.remove(name);
 
-            // TODO: how do we prevent entries being undeleted due to journal replay?
+            // Write tombstone value to journal
+            let entry = FileEntry {
+                name: name.to_path_buf(),
+                info: ZERO_FILE_INFO,
+            };
+            self.journal(&entry)?;
+
+            Ok(())
         }
 
         /// journal appends a FileEntry to the journal file and does a fsync
@@ -203,7 +228,7 @@ pub mod metadata {
         }
 
         /// flush writes the in-memory database to disk and closes/deletes the journal
-        fn flush(&mut self) -> Result<(), std::io::Error> {
+        pub(crate) fn flush(&mut self) -> Result<(), std::io::Error> {
             // Create or open database
             let mut file_db;
             if self.path_db.exists() {
@@ -244,8 +269,28 @@ mod test {
     use super::metadata::{FileEntry, FileInfo, Store};
     use std::convert::TryFrom;
     use std::ffi::OsStr;
+    use std::fs::OpenOptions;
+    use std::io::{BufRead, BufReader};
+    use std::mem::forget;
     use std::path::Path;
+    use tempfile::tempdir;
     use time::Timespec;
+
+    fn dump_file(path: &Path) {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .expect("could not open file");
+        let reader = BufReader::new(file);
+        for res in reader.lines() {
+            let line = res.expect("could not read line");
+            println!(
+                "{}: {}",
+                path.to_str().expect("could not get string from path"),
+                line
+            )
+        }
+    }
 
     #[test]
     fn basic_store_test() {
@@ -262,7 +307,16 @@ mod test {
             gid: 2,
         };
 
-        let mut s = Store::new(Path::new("/tmp")).unwrap();
+        let dir = tempdir().expect("could not create tempdir");
+        let dir_pathbuf = dir.path().to_path_buf(); // We'll need a copy later on
+        let dir_path = dir_pathbuf.as_path();
+
+        assert!(dir_path.exists());
+
+        let mut s = Store::new(dir.path()).unwrap();
+
+        let journal_file_pathbuf = dir_path.join(".progitoor_journal_v1_dont_commit_me");
+        let journal_file = journal_file_pathbuf.as_path();
 
         assert!(s.get(Path::new("/non-existent")).is_none());
 
@@ -278,6 +332,73 @@ mod test {
         s.remove(Path::new("/f1"));
 
         assert!(s.get(Path::new("/f1")).is_none());
+
+        // Check that journal gets flushed
+        drop(s);
+        assert!(!journal_file.exists());
+
+        // Make sure we've cleaned up temporary files
+        drop(dir);
+        assert!(!dir_path.exists());
+    }
+
+    #[test]
+    fn crashy_store_test() {
+        let f1 = FileInfo {
+            time: Timespec { sec: 1, nsec: 1 },
+            mode: 1,
+            uid: 1,
+            gid: 1,
+        };
+        let f2 = FileInfo {
+            time: Timespec { sec: 2, nsec: 2 },
+            mode: 2,
+            uid: 2,
+            gid: 2,
+        };
+
+        let dir = tempdir().expect("could not create tempdir");
+        let dir_pathbuf = dir.path().to_path_buf(); // We'll need a copy later on
+        let dir_path = dir_pathbuf.as_path();
+        let journal_file_pathbuf = dir_path.join(".progitoor_journal_v1_dont_commit_me");
+        let journal_file = journal_file_pathbuf.as_path();
+        let db_file_pathbuf = dir_path.join(".progitoor_db_v1");
+        let db_file = db_file_pathbuf.as_path();
+
+        {
+            let mut s = Store::new(dir.path()).unwrap();
+            s.set(Path::new("/f1"), f1);
+            s.flush(); // so we get a db on disk, with one entry
+            s.set(Path::new("/f2"), f2);
+            let gf1 = s.get(Path::new("/f1")).unwrap();
+            let gf2 = s.get(Path::new("/f2")).unwrap();
+            assert_eq!(f1, *gf1);
+            assert_eq!(f2, *gf2);
+
+            s.remove(Path::new("/f1"));
+
+            forget(s); // Simulate crash
+        }
+
+        dump_file(journal_file);
+        dump_file(db_file);
+
+        {
+            let mut s = Store::new(dir.path()).unwrap();
+
+            // After new() has run, the journal should have been replayed and deleted
+            assert!(!journal_file.exists());
+
+            let gf2 = s.get(Path::new("/f2")).unwrap(); // Replayed from journal
+            assert_eq!(f2, *gf2);
+
+            // First loaded from DB then deleted due to tombstone in journal
+            assert!(s.get(Path::new("/f1")).is_none());
+        }
+
+        // Make sure we've cleaned up temporary files
+        drop(dir);
+        assert!(!dir_path.exists());
     }
 
     #[test]
