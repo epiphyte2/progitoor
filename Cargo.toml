@@ -12,3 +12,9 @@ readme = "README.md"
 # description = ""
 # keywords = []
 # categories = ["command-line-utilities"]
+
+[dependencies]
+fuse_mt = "0.5.1"
+time = "0.1.43"
+libc = "0.2.101"
+nix = "0.22.1"
