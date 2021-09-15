@@ -5,13 +5,17 @@ extern crate libc;
 extern crate nix;
 extern crate time;
 
+use anyhow::{anyhow, Context, Result};
+use clap::{
+    arg_enum, crate_authors, crate_description, crate_name, crate_version, value_t, App, Arg,
+};
 use fuse_mt::*;
 use nix::dir::{Dir, Type};
 use nix::fcntl;
 use nix::sys::{stat, statfs};
 use nix::unistd;
-use std::env;
 use std::ffi::{CString, OsStr, OsString};
+use std::fs;
 use std::io;
 use std::os::unix::prelude::*;
 use std::path::{Component, Path};
@@ -493,15 +497,58 @@ impl FilesystemMT for FS {
     }
 }
 
-fn main() {
-    let dir = env::args_os().nth(1).unwrap();
+arg_enum! {
+    #[derive(Debug)]
+    pub enum MappingMode {
+        Full,
+        OneToOne,
+        PassThrough
+    }
+}
+
+fn main() -> Result<()> {
+    let arg = App::new(crate_name!())
+        .version(crate_version!())
+        .author(crate_authors!("\n"))
+        .about(crate_description!())
+        .arg(
+            Arg::with_name("MODE")
+                .short("m")
+                .long("mode")
+                .help("Specifies the mapping mode")
+                .required(false)
+                .takes_value(true)
+                .default_value("Full"),
+        )
+        .arg(Arg::with_name("DIR").index(1).required(true))
+        .get_matches();
+
+    let mode = value_t!(arg, "MODE", MappingMode).unwrap_or_else(|e| e.exit());
+    let dir = arg
+        .value_of("DIR")
+        .context("Could not get base/mount point directory")?;
+
+    let mount_path = Path::new(dir);
+    if !mount_path.exists() {
+        return Err(anyhow!("Root/mount point path {} does not exist", dir));
+    }
+    if !mount_path.is_dir() {
+        return Err(anyhow!("Root/mount point path {} is not a directory", dir));
+    }
+    let absolute_mount_path = fs::canonicalize(mount_path)
+        .context(format!("Failed to canonicalize mount path of {}", dir))?;
+
+    // TODO: remove this, or replace with proper logging
+    println!("Mapping mode: {}", mode);
+    println!("Absolute mount/root dir: {:?}", absolute_mount_path);
+
     let fuse = FS {
         root: fcntl::open(
-            &dir[..],
+            &absolute_mount_path,
             fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
             stat::Mode::empty(),
         )
-        .unwrap(),
+        .context(format!("Failed to open directory {}", dir))?,
     };
     fuse_mt::mount(
         fuse_mt::FuseMT::new(fuse, 1),
@@ -513,5 +560,5 @@ fn main() {
             &OsString::from("allow_root"),
         ],
     )
-    .unwrap();
+    .context("Mount failed")
 }

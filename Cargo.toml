@@ -7,9 +7,9 @@ edition = "2018"
 license = "GPL-3.0"
 authors = ["Edwin Peer <edwin@epiphyte2.co>", "Simeon Miteff <simeon@epiphyte2.co>" ]
 readme = "README.md"
+description = "Think of something clever to say here (comes from Cargo.toml)"
 # repository = "https://github.com/"
 # documentation = "https://docs.rs/"
-# description = ""
 # keywords = []
 # categories = ["command-line-utilities"]
 
@@ -20,3 +20,5 @@ libc = "0.2.101"
 nix = "0.22.1"
 thiserror = "1.0"
 tempfile = "3"
+clap = "2"
+anyhow = "1.0"
