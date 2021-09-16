@@ -1,5 +1,6 @@
 // Copyright 2021 Edwin Peer and Simeon Miteff
 
+extern crate daemonize;
 extern crate fuse_mt;
 extern crate libc;
 extern crate nix;
@@ -9,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{
     arg_enum, crate_authors, crate_description, crate_name, crate_version, value_t, App, Arg,
 };
+use daemonize::{Daemonize, DaemonizeError};
 use fuse_mt::*;
 use nix::dir::{Dir, Type};
 use nix::fcntl;
@@ -16,6 +18,7 @@ use nix::sys::{stat, statfs};
 use nix::unistd;
 use std::ffi::{CString, OsStr, OsString};
 use std::fs;
+use std::fs::File;
 use std::io;
 use std::os::unix::prelude::*;
 use std::path::{Component, Path};
@@ -497,6 +500,24 @@ impl FilesystemMT for FS {
     }
 }
 
+fn background() -> std::result::Result<(), DaemonizeError> {
+    // FIXME: if we don't have this, we don't see any errors if the process dies after forking
+    //        so this needs to be replaced with proper logging, but is useful in the meantime.
+    let stdout = File::create("/tmp/progitoor.out").unwrap();
+    let stderr = File::create("/tmp/progitoor.err").unwrap();
+
+    let daemonize = Daemonize::new()
+        .pid_file("/tmp/progitoor.pid") // TODO: how can we delete this on exit?
+        .stdout(stdout)
+        .stderr(stderr)
+        .chown_pid_file(true);
+
+    // This runs in the parent process, so isn't useful for unmount
+    //.exit_action(|| println!("Executed before master process exits"));
+
+    daemonize.start()
+}
+
 arg_enum! {
     #[derive(Debug)]
     pub enum MappingMode {
@@ -519,6 +540,13 @@ fn main() -> Result<()> {
                 .required(false)
                 .takes_value(true)
                 .default_value("Full"),
+        )
+        .arg(
+            Arg::with_name("FOREGROUND")
+                .short("f")
+                .long("foreground")
+                .help("Don't fork - remain in foreground")
+                .required(false),
         )
         .arg(Arg::with_name("DIR").index(1).required(true))
         .get_matches();
@@ -550,9 +578,14 @@ fn main() -> Result<()> {
         )
         .context(format!("Failed to open directory {}", dir))?,
     };
+
+    if !arg.is_present("FOREGROUND") {
+        background().context("failed to daemonize")?;
+    }
+
     fuse_mt::mount(
         fuse_mt::FuseMT::new(fuse, 1),
-        &dir,
+        &absolute_mount_path,
         &[
             &OsString::from("-o"),
             &OsString::from("nonempty"),
