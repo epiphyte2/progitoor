@@ -23,8 +23,17 @@ use std::io;
 use std::os::unix::prelude::*;
 use std::path::{Component, Path};
 
+use progitoor::metadata::FileInfo;
+
+struct MountOwner {
+    uid: unistd::Uid,
+    gid: unistd::Gid,
+}
+
 struct FS {
     root: RawFd,
+    owner: Option<MountOwner>,
+    mapping: MappingMode,
 }
 
 fn relative_path(path: &Path) -> &Path {
@@ -49,7 +58,11 @@ fn utime(time: Option<time::Timespec>) -> nix::sys::time::TimeSpec {
     })
 }
 
-fn result_entry(result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
+fn result_entry(
+    owner: &Option<MountOwner>,
+    mapping: &FileInfo,
+    result: Result<stat::FileStat, nix::Error>,
+) -> ResultEntry {
     match result {
         Ok(stat) => Ok((
             time::Timespec::new(1, 0),
@@ -69,10 +82,28 @@ fn result_entry(result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
                     libc::S_IFSOCK => FileType::Socket,
                     _ => FileType::RegularFile,
                 },
-                perm: stat.st_mode as u16,
+                perm: (stat.st_mode & !libc::S_IFMT) as u16,
                 nlink: stat.st_nlink as u32,
-                uid: stat.st_uid,
-                gid: stat.st_gid,
+                uid: match mapping.uid {
+                    Some(uid) => {
+                        if owner.is_some() && stat.st_uid != owner.as_ref().unwrap().uid.as_raw() {
+                            stat.st_uid
+                        } else {
+                            uid
+                        }
+                    }
+                    None => stat.st_uid,
+                },
+                gid: match mapping.gid {
+                    Some(gid) => {
+                        if owner.is_some() && stat.st_gid != owner.as_ref().unwrap().gid.as_raw() {
+                            stat.st_gid
+                        } else {
+                            gid
+                        }
+                    }
+                    None => stat.st_gid,
+                },
                 rdev: stat.st_rdev as u32,
                 flags: 0,
             },
@@ -125,16 +156,41 @@ fn result_statfs(result: Result<statfs::Statfs, nix::Error>) -> ResultStatfs {
     }
 }
 
+impl FS {
+    fn mapping(&self, req: &RequestInfo, _path: &Path) -> FileInfo {
+        match self.mapping {
+            MappingMode::OneToOne => FileInfo {
+                uid: if req.uid as libc::uid_t == self.owner.as_ref().unwrap().uid.as_raw() {
+                    None
+                } else {
+                    Some(0)
+                },
+                gid: if req.gid as libc::gid_t == self.owner.as_ref().unwrap().gid.as_raw() {
+                    None
+                } else {
+                    Some(0)
+                },
+                ..Default::default()
+            },
+            _ => FileInfo::default(),
+        }
+    }
+}
+
 impl FilesystemMT for FS {
-    fn getattr(&self, _req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
-        result_entry(match fh {
-            Some(fd) => stat::fstat(fd as RawFd),
-            None => stat::fstatat(
-                self.root,
-                relative_path(path),
-                fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-            ),
-        })
+    fn getattr(&self, req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
+        result_entry(
+            &self.owner,
+            &self.mapping(&req, path),
+            match fh {
+                Some(fd) => stat::fstat(fd as RawFd),
+                None => stat::fstatat(
+                    self.root,
+                    relative_path(path),
+                    fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+                ),
+            },
+        )
     }
 
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
@@ -159,11 +215,23 @@ impl FilesystemMT for FS {
         gid: Option<u32>,
     ) -> ResultEmpty {
         let uid = match uid {
-            Some(u) => Some(unistd::Uid::from_raw(u)),
+            Some(u) => {
+                if self.mapping == MappingMode::OneToOne && u == 0 {
+                    Some(self.owner.as_ref().unwrap().uid)
+                } else {
+                    Some(unistd::Uid::from_raw(u))
+                }
+            }
             None => None,
         };
         let gid = match gid {
-            Some(g) => Some(unistd::Gid::from_raw(g)),
+            Some(g) => {
+                if self.mapping == MappingMode::OneToOne && g == 0 {
+                    Some(self.owner.as_ref().unwrap().gid)
+                } else {
+                    Some(unistd::Gid::from_raw(g))
+                }
+            }
             None => None,
         };
         result_empty(match fh {
@@ -227,7 +295,7 @@ impl FilesystemMT for FS {
 
     fn mknod(
         &self,
-        _req: RequestInfo,
+        req: RequestInfo,
         parent: &Path,
         name: &OsStr,
         mode: u32,
@@ -245,17 +313,25 @@ impl FilesystemMT for FS {
                 return Err(io::Error::last_os_error().raw_os_error().unwrap());
             };
         }
-        result_entry(stat::fstatat(self.root, path, fcntl::AtFlags::empty()))
+        result_entry(
+            &self.owner,
+            &self.mapping(&req, path),
+            stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
+        )
     }
 
-    fn mkdir(&self, _req: RequestInfo, parent: &Path, name: &OsStr, mode: u32) -> ResultEntry {
+    fn mkdir(&self, req: RequestInfo, parent: &Path, name: &OsStr, mode: u32) -> ResultEntry {
         let path = &relative_path(parent).join(name);
         result_empty(stat::mkdirat(
             self.root as RawFd,
             path,
             stat::Mode::from_bits_truncate(mode as stat::mode_t),
         ))?;
-        result_entry(stat::fstatat(self.root, path, fcntl::AtFlags::empty()))
+        result_entry(
+            &self.owner,
+            &self.mapping(&req, path),
+            stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
+        )
     }
 
     fn unlink(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
@@ -274,20 +350,14 @@ impl FilesystemMT for FS {
         ))
     }
 
-    fn symlink(
-        &self,
-        _req: RequestInfo,
-        parent: &Path,
-        name: &OsStr,
-        target: &Path,
-    ) -> ResultEntry {
+    fn symlink(&self, req: RequestInfo, parent: &Path, name: &OsStr, target: &Path) -> ResultEntry {
         let path = &relative_path(parent).join(name);
         result_empty(unistd::symlinkat(target, Some(self.root), path))?;
-        result_entry(stat::fstatat(
-            self.root,
-            path,
-            fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-        ))
+        result_entry(
+            &self.owner,
+            &self.mapping(&req, path),
+            stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
+        )
     }
 
     fn rename(
@@ -305,7 +375,7 @@ impl FilesystemMT for FS {
 
     fn link(
         &self,
-        _req: RequestInfo,
+        req: RequestInfo,
         path: &Path,
         new_parent: &Path,
         new_name: &OsStr,
@@ -319,7 +389,11 @@ impl FilesystemMT for FS {
             new,
             unistd::LinkatFlags::NoSymlinkFollow,
         ))?;
-        result_entry(stat::fstatat(self.root, new, fcntl::AtFlags::empty()))
+        result_entry(
+            &self.owner,
+            &self.mapping(&req, new),
+            stat::fstatat(self.root, new, fcntl::AtFlags::empty()),
+        )
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
@@ -469,7 +543,7 @@ impl FilesystemMT for FS {
 
     fn create(
         &self,
-        _req: RequestInfo,
+        req: RequestInfo,
         parent: &Path,
         name: &OsStr,
         mode: u32,
@@ -488,7 +562,11 @@ impl FilesystemMT for FS {
             Ok(fd) => fd as RawFd,
             Err(e) => return Err(e as libc::c_int),
         };
-        match result_entry(stat::fstatat(self.root, path, fcntl::AtFlags::empty())) {
+        match result_entry(
+            &self.owner,
+            &self.mapping(&req, path),
+            stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
+        ) {
             Ok(entry) => Ok(CreatedEntry {
                 ttl: entry.0,
                 attr: entry.1,
@@ -519,7 +597,7 @@ fn background() -> std::result::Result<(), DaemonizeError> {
 }
 
 arg_enum! {
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub enum MappingMode {
         Full,
         OneToOne,
@@ -551,7 +629,7 @@ fn main() -> Result<()> {
         .arg(Arg::with_name("DIR").index(1).required(true))
         .get_matches();
 
-    let mode = value_t!(arg, "MODE", MappingMode).unwrap_or_else(|e| e.exit());
+    let mapping = value_t!(arg, "MODE", MappingMode).unwrap_or_else(|e| e.exit());
     let dir = arg
         .value_of("DIR")
         .context("Could not get base/mount point directory")?;
@@ -567,7 +645,7 @@ fn main() -> Result<()> {
         .context(format!("Failed to canonicalize mount path of {}", dir))?;
 
     // TODO: remove this, or replace with proper logging
-    println!("Mapping mode: {}", mode);
+    println!("Mapping mode: {}", mapping);
     println!("Absolute mount/root dir: {:?}", absolute_mount_path);
 
     let fuse = FS {
@@ -577,6 +655,14 @@ fn main() -> Result<()> {
             stat::Mode::empty(),
         )
         .context(format!("Failed to open directory {}", dir))?,
+        owner: match mapping {
+            MappingMode::OneToOne => Some(MountOwner {
+                uid: unistd::getuid(),
+                gid: unistd::getgid(),
+            }),
+            _ => None,
+        },
+        mapping: mapping,
     };
 
     if !arg.is_present("FOREGROUND") {

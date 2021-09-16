@@ -33,20 +33,20 @@ pub mod metadata {
     }
 
     /// FileInfo tracks file attributes progitoor is going to remap
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Default)]
     pub struct FileInfo {
-        pub time: Timespec,
-        pub mode: u16,
-        pub uid: u32,
-        pub gid: u32,
+        pub time: Option<Timespec>,
+        pub mode: Option<u16>,
+        pub uid: Option<u32>,
+        pub gid: Option<u32>,
     }
 
     /// ZERO_FILE_INFO is used to write tombstones to the journal
     const ZERO_FILE_INFO: FileInfo = FileInfo {
-        time: Timespec { sec: 0, nsec: 0 },
-        mode: 0,
-        uid: 0,
-        gid: 0,
+        time: Some(Timespec { sec: 0, nsec: 0 }),
+        mode: Some(0),
+        uid: Some(0),
+        gid: Some(0),
     };
 
     /// FileEntry is a name, info tuple
@@ -62,11 +62,11 @@ pub mod metadata {
         fn into(self) -> String {
             format!(
                 "{:04x} {:04x} {:04x} {:09x} {:08x} {}",
-                self.info.mode,
-                self.info.uid,
-                self.info.gid,
-                self.info.time.sec,
-                self.info.time.nsec,
+                self.info.mode.unwrap_or_default(),
+                self.info.uid.unwrap_or_default(),
+                self.info.gid.unwrap_or_default(),
+                self.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).sec,
+                self.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).nsec,
                 self.name.to_str().unwrap(), // FIXME this might be a bad idea
             )
         }
@@ -94,13 +94,13 @@ pub mod metadata {
             Ok(FileEntry {
                 name: parts[5].parse().unwrap(),
                 info: FileInfo {
-                    mode: u16::from_str_radix(parts[0], 16)?,
-                    uid: u32::from_str_radix(parts[1], 16)?,
-                    gid: u32::from_str_radix(parts[2], 16)?,
-                    time: Timespec {
+                    mode: Some(u16::from_str_radix(parts[0], 16)?),
+                    uid: Some(u32::from_str_radix(parts[1], 16)?),
+                    gid: Some(u32::from_str_radix(parts[2], 16)?),
+                    time: Some(Timespec {
                         sec: i64::from_str_radix(parts[3], 16)?,
                         nsec: i32::from_str_radix(parts[4], 16)?,
-                    },
+                    }),
                 },
             })
         }
@@ -183,7 +183,7 @@ pub mod metadata {
                         Ok(line) => {
                             match FileEntry::try_from(&*line) {
                                 Ok(parse) => {
-                                    if parse.info.mode == 0 {
+                                    if parse.info.mode.unwrap_or_default() == 0 {
                                         // Tombstone value
                                         map.write().unwrap().remove(parse.name.as_path());
 
@@ -344,16 +344,16 @@ mod test {
     #[test]
     fn basic_store_test() {
         let f1 = FileInfo {
-            time: Timespec { sec: 1, nsec: 1 },
-            mode: 1,
-            uid: 1,
-            gid: 1,
+            time: Some(Timespec { sec: 1, nsec: 1 }),
+            mode: Some(1),
+            uid: Some(1),
+            gid: Some(1),
         };
         let f2 = FileInfo {
-            time: Timespec { sec: 2, nsec: 2 },
-            mode: 2,
-            uid: 2,
-            gid: 2,
+            time: Some(Timespec { sec: 2, nsec: 2 }),
+            mode: Some(2),
+            uid: Some(2),
+            gid: Some(2),
         };
 
         let dir = tempdir().expect("could not create tempdir");
@@ -394,16 +394,16 @@ mod test {
     #[test]
     fn crashy_store_test() {
         let f1 = FileInfo {
-            time: Timespec { sec: 1, nsec: 1 },
-            mode: 1,
-            uid: 1,
-            gid: 1,
+            time: Some(Timespec { sec: 1, nsec: 1 }),
+            mode: Some(1),
+            uid: Some(1),
+            gid: Some(1),
         };
         let f2 = FileInfo {
-            time: Timespec { sec: 2, nsec: 2 },
-            mode: 2,
-            uid: 2,
-            gid: 2,
+            time: Some(Timespec { sec: 2, nsec: 2 }),
+            mode: Some(2),
+            uid: Some(2),
+            gid: Some(2),
         };
 
         let dir = tempdir().expect("could not create tempdir");
@@ -458,11 +458,11 @@ mod test {
     fn fileentry_deserialisation_test() {
         let good = FileEntry::try_from("01a4 0000 0000 0613ab659 00000000 /etc/passwd")
             .expect("failed to parse db string");
-        assert_eq!(good.info.mode, 0o644);
-        assert_eq!(good.info.uid, 0);
-        assert_eq!(good.info.gid, 0);
+        assert_eq!(good.info.mode.unwrap(), 0o644);
+        assert_eq!(good.info.uid.unwrap(), 0);
+        assert_eq!(good.info.gid.unwrap(), 0);
         assert_eq!(
-            good.info.time,
+            good.info.time.unwrap(),
             Timespec {
                 sec: 1631237721,
                 nsec: 0
@@ -478,13 +478,13 @@ mod test {
         let model = &FileEntry {
             name: "/etc/passwd".parse().expect("failed to create db string"),
             info: FileInfo {
-                time: Timespec {
+                time: Some(Timespec {
                     sec: 1631237721,
                     nsec: 0,
-                },
-                mode: 0o644,
-                uid: 0,
-                gid: 0,
+                }),
+                mode: Some(0o644),
+                uid: Some(0),
+                gid: Some(0),
             },
         };
 
