@@ -1,8 +1,11 @@
 // Copyright 2021 Edwin Peer and Simeon Miteff
 
+extern crate libc;
+extern crate nix;
 extern crate time;
 
 pub mod metadata {
+    use nix::unistd;
     use std::borrow::Borrow;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -36,17 +39,17 @@ pub mod metadata {
     #[derive(Clone, Copy, Debug, PartialEq, Default)]
     pub struct FileInfo {
         pub time: Option<Timespec>,
-        pub mode: Option<u16>,
-        pub uid: Option<u32>,
-        pub gid: Option<u32>,
+        pub mode: Option<libc::mode_t>,
+        pub uid: Option<unistd::Uid>,
+        pub gid: Option<unistd::Gid>,
     }
 
     /// ZERO_FILE_INFO is used to write tombstones to the journal
     const ZERO_FILE_INFO: FileInfo = FileInfo {
         time: Some(Timespec { sec: 0, nsec: 0 }),
-        mode: Some(0),
-        uid: Some(0),
-        gid: Some(0),
+        mode: Some(0 as libc::mode_t),
+        uid: Some(unistd::Uid::from_raw(0 as libc::uid_t)),
+        gid: Some(unistd::Gid::from_raw(0 as libc::gid_t)),
     };
 
     /// FileEntry is a name, info tuple
@@ -63,8 +66,8 @@ pub mod metadata {
             format!(
                 "{:04x} {:04x} {:04x} {:09x} {:08x} {}",
                 self.info.mode.unwrap_or_default(),
-                self.info.uid.unwrap_or_default(),
-                self.info.gid.unwrap_or_default(),
+                self.info.uid.unwrap_or(unistd::Uid::from_raw(0)).as_raw(),
+                self.info.gid.unwrap_or(unistd::Gid::from_raw(0)).as_raw(),
                 self.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).sec,
                 self.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).nsec,
                 self.name.to_str().unwrap(), // FIXME this might be a bad idea
@@ -94,9 +97,13 @@ pub mod metadata {
             Ok(FileEntry {
                 name: parts[5].parse().unwrap(),
                 info: FileInfo {
-                    mode: Some(u16::from_str_radix(parts[0], 16)?),
-                    uid: Some(u32::from_str_radix(parts[1], 16)?),
-                    gid: Some(u32::from_str_radix(parts[2], 16)?),
+                    mode: Some(u16::from_str_radix(parts[0], 16)? as libc::mode_t),
+                    uid: Some(unistd::Uid::from_raw(
+                        u32::from_str_radix(parts[1], 16)? as libc::uid_t
+                    )),
+                    gid: Some(unistd::Gid::from_raw(
+                        u32::from_str_radix(parts[2], 16)? as libc::gid_t
+                    )),
                     time: Some(Timespec {
                         sec: i64::from_str_radix(parts[3], 16)?,
                         nsec: i32::from_str_radix(parts[4], 16)?,
@@ -317,6 +324,7 @@ pub mod metadata {
 #[cfg(test)]
 mod test {
     use super::metadata::{FileEntry, FileInfo, Store};
+    use nix::unistd;
     use std::convert::TryFrom;
     use std::fs::OpenOptions;
     use std::io::{BufRead, BufReader};
@@ -346,14 +354,14 @@ mod test {
         let f1 = FileInfo {
             time: Some(Timespec { sec: 1, nsec: 1 }),
             mode: Some(1),
-            uid: Some(1),
-            gid: Some(1),
+            uid: Some(unistd::Uid::from_raw(1)),
+            gid: Some(unistd::Gid::from_raw(1)),
         };
         let f2 = FileInfo {
             time: Some(Timespec { sec: 2, nsec: 2 }),
             mode: Some(2),
-            uid: Some(2),
-            gid: Some(2),
+            uid: Some(unistd::Uid::from_raw(2)),
+            gid: Some(unistd::Gid::from_raw(2)),
         };
 
         let dir = tempdir().expect("could not create tempdir");
@@ -386,7 +394,7 @@ mod test {
         drop(s);
         assert!(!journal_file.exists());
 
-        // Make sure we've cleaned up temporary files
+        // Make sure we've FS cleaned up temporary files
         drop(dir);
         assert!(!dir_path.exists());
     }
@@ -396,14 +404,14 @@ mod test {
         let f1 = FileInfo {
             time: Some(Timespec { sec: 1, nsec: 1 }),
             mode: Some(1),
-            uid: Some(1),
-            gid: Some(1),
+            uid: Some(unistd::Uid::from_raw(1)),
+            gid: Some(unistd::Gid::from_raw(1)),
         };
         let f2 = FileInfo {
             time: Some(Timespec { sec: 2, nsec: 2 }),
             mode: Some(2),
-            uid: Some(2),
-            gid: Some(2),
+            uid: Some(unistd::Uid::from_raw(2)),
+            gid: Some(unistd::Gid::from_raw(2)),
         };
 
         let dir = tempdir().expect("could not create tempdir");
@@ -459,8 +467,8 @@ mod test {
         let good = FileEntry::try_from("01a4 0000 0000 0613ab659 00000000 /etc/passwd")
             .expect("failed to parse db string");
         assert_eq!(good.info.mode.unwrap(), 0o644);
-        assert_eq!(good.info.uid.unwrap(), 0);
-        assert_eq!(good.info.gid.unwrap(), 0);
+        assert_eq!(good.info.uid.unwrap(), unistd::Uid::from_raw(0));
+        assert_eq!(good.info.gid.unwrap(), unistd::Gid::from_raw(0));
         assert_eq!(
             good.info.time.unwrap(),
             Timespec {
@@ -483,8 +491,8 @@ mod test {
                     nsec: 0,
                 }),
                 mode: Some(0o644),
-                uid: Some(0),
-                gid: Some(0),
+                uid: Some(unistd::Uid::from_raw(0)),
+                gid: Some(unistd::Gid::from_raw(0)),
             },
         };
 

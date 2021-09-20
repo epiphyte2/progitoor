@@ -32,8 +32,9 @@ struct MountOwner {
 
 struct FS {
     root: RawFd,
-    owner: Option<MountOwner>,
+    owner: MountOwner,
     mapping: MappingMode,
+    metadata: progitoor::metadata::Store,
 }
 
 fn relative_path(path: &Path) -> &Path {
@@ -59,55 +60,58 @@ fn utime(time: Option<time::Timespec>) -> nix::sys::time::TimeSpec {
 }
 
 fn result_entry(
-    owner: &Option<MountOwner>,
-    mapping: &FileInfo,
+    mapping: Option<FileInfo>,
     result: Result<stat::FileStat, nix::Error>,
 ) -> ResultEntry {
     match result {
-        Ok(stat) => Ok((
-            time::Timespec::new(1, 0),
-            FileAttr {
-                size: stat.st_size as u64,
-                blocks: stat.st_blocks as u64,
-                atime: time::Timespec::new(stat.st_atime, stat.st_atime_nsec as i32),
-                mtime: time::Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
-                ctime: time::Timespec::new(stat.st_ctime, stat.st_ctime_nsec as i32),
-                crtime: time::Timespec::new(0, 0),
-                kind: match stat.st_mode as libc::mode_t & libc::S_IFMT {
-                    libc::S_IFIFO => FileType::NamedPipe,
-                    libc::S_IFCHR => FileType::CharDevice,
-                    libc::S_IFBLK => FileType::BlockDevice,
-                    libc::S_IFDIR => FileType::Directory,
-                    libc::S_IFLNK => FileType::Symlink,
-                    libc::S_IFSOCK => FileType::Socket,
-                    _ => FileType::RegularFile,
-                },
-                perm: (stat.st_mode & !libc::S_IFMT) as u16,
-                nlink: stat.st_nlink as u32,
-                uid: match mapping.uid {
-                    Some(uid) => {
-                        if owner.is_some() && stat.st_uid != owner.as_ref().unwrap().uid.as_raw() {
-                            stat.st_uid
-                        } else {
-                            uid
+        Ok(stat) => {
+            let mode = match mapping {
+                Some(ref info) if matches!(info.mode, Some(_)) => info.mode.unwrap(),
+                _ => stat.st_mode as libc::mode_t,
+            };
+            let atime = time::Timespec::new(stat.st_atime, stat.st_atime_nsec as i32);
+            let ctime = time::Timespec::new(stat.st_ctime, stat.st_ctime_nsec as i32);
+            let mtime = match mapping {
+                Some(ref info) if matches!(info.time, Some(_)) => info.time.unwrap(),
+                _ => time::Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
+            };
+            Ok((
+                time::Timespec::new(1, 0),
+                FileAttr {
+                    size: stat.st_size as u64,
+                    blocks: stat.st_blocks as u64,
+                    atime: if atime > mtime { atime } else { mtime },
+                    mtime: mtime,
+                    ctime: if ctime > mtime { ctime } else { mtime },
+                    crtime: time::Timespec::new(0, 0),
+                    kind: match mode & libc::S_IFMT {
+                        libc::S_IFIFO => FileType::NamedPipe,
+                        libc::S_IFCHR => FileType::CharDevice,
+                        libc::S_IFBLK => FileType::BlockDevice,
+                        libc::S_IFDIR => FileType::Directory,
+                        libc::S_IFLNK => FileType::Symlink,
+                        libc::S_IFSOCK => FileType::Socket,
+                        _ => FileType::RegularFile,
+                    },
+                    perm: (mode & !libc::S_IFMT) as u16,
+                    nlink: stat.st_nlink as u32,
+                    uid: match mapping {
+                        Some(ref info) if matches!(info.uid, Some(_)) => {
+                            info.uid.unwrap().as_raw() as u32
                         }
-                    }
-                    None => stat.st_uid,
-                },
-                gid: match mapping.gid {
-                    Some(gid) => {
-                        if owner.is_some() && stat.st_gid != owner.as_ref().unwrap().gid.as_raw() {
-                            stat.st_gid
-                        } else {
-                            gid
+                        _ => stat.st_uid,
+                    },
+                    gid: match mapping {
+                        Some(ref info) if matches!(info.gid, Some(_)) => {
+                            info.gid.unwrap().as_raw() as u32
                         }
-                    }
-                    None => stat.st_gid,
+                        _ => stat.st_gid,
+                    },
+                    rdev: stat.st_rdev as u32,
+                    flags: 0,
                 },
-                rdev: stat.st_rdev as u32,
-                flags: 0,
-            },
-        )),
+            ))
+        }
         Err(e) => Err(e as libc::c_int),
     }
 }
@@ -157,31 +161,34 @@ fn result_statfs(result: Result<statfs::Statfs, nix::Error>) -> ResultStatfs {
 }
 
 impl FS {
-    fn mapping(&self, req: &RequestInfo, _path: &Path) -> FileInfo {
-        match self.mapping {
-            MappingMode::OneToOne => FileInfo {
-                uid: if req.uid as libc::uid_t == self.owner.as_ref().unwrap().uid.as_raw() {
-                    None
-                } else {
-                    Some(0)
-                },
-                gid: if req.gid as libc::gid_t == self.owner.as_ref().unwrap().gid.as_raw() {
-                    None
-                } else {
-                    Some(0)
-                },
+    fn mapping(&self, req: &RequestInfo, path: &Path) -> Option<FileInfo> {
+        let mut info = match self.mapping {
+            MappingMode::Full => self.metadata.get(path),
+            MappingMode::OneToOne => Some(FileInfo {
+                uid: Some(unistd::Uid::from_raw(0)),
+                gid: Some(unistd::Gid::from_raw(0)),
                 ..Default::default()
-            },
-            _ => FileInfo::default(),
-        }
+            }),
+            _ => None,
+        };
+        if unistd::Uid::from_raw(req.uid as libc::uid_t) == self.owner.uid {
+            if let Some(ref mut info) = info {
+                info.uid.take();
+            }
+        };
+        if unistd::Gid::from_raw(req.gid as libc::gid_t) == self.owner.gid {
+            if let Some(ref mut info) = info {
+                info.gid.take();
+            }
+        };
+        info
     }
 }
 
 impl FilesystemMT for FS {
     fn getattr(&self, req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
         result_entry(
-            &self.owner,
-            &self.mapping(&req, path),
+            self.mapping(&req, path),
             match fh {
                 Some(fd) => stat::fstat(fd as RawFd),
                 None => stat::fstatat(
@@ -215,23 +222,17 @@ impl FilesystemMT for FS {
         gid: Option<u32>,
     ) -> ResultEmpty {
         let uid = match uid {
-            Some(u) => {
-                if self.mapping == MappingMode::OneToOne && u == 0 {
-                    Some(self.owner.as_ref().unwrap().uid)
-                } else {
-                    Some(unistd::Uid::from_raw(u))
-                }
-            }
+            Some(uid) => match self.mapping {
+                MappingMode::OneToOne if uid == 0 => Some(self.owner.uid),
+                _ => Some(unistd::Uid::from_raw(uid as libc::uid_t)),
+            },
             None => None,
         };
         let gid = match gid {
-            Some(g) => {
-                if self.mapping == MappingMode::OneToOne && g == 0 {
-                    Some(self.owner.as_ref().unwrap().gid)
-                } else {
-                    Some(unistd::Gid::from_raw(g))
-                }
-            }
+            Some(gid) => match self.mapping {
+                MappingMode::OneToOne if gid == 0 => Some(self.owner.gid),
+                _ => Some(unistd::Gid::from_raw(gid as libc::gid_t)),
+            },
             None => None,
         };
         result_empty(match fh {
@@ -314,8 +315,7 @@ impl FilesystemMT for FS {
             };
         }
         result_entry(
-            &self.owner,
-            &self.mapping(&req, path),
+            self.mapping(&req, path),
             stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
         )
     }
@@ -328,8 +328,7 @@ impl FilesystemMT for FS {
             stat::Mode::from_bits_truncate(mode as stat::mode_t),
         ))?;
         result_entry(
-            &self.owner,
-            &self.mapping(&req, path),
+            self.mapping(&req, path),
             stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
         )
     }
@@ -354,8 +353,7 @@ impl FilesystemMT for FS {
         let path = &relative_path(parent).join(name);
         result_empty(unistd::symlinkat(target, Some(self.root), path))?;
         result_entry(
-            &self.owner,
-            &self.mapping(&req, path),
+            self.mapping(&req, path),
             stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
         )
     }
@@ -390,8 +388,7 @@ impl FilesystemMT for FS {
             unistd::LinkatFlags::NoSymlinkFollow,
         ))?;
         result_entry(
-            &self.owner,
-            &self.mapping(&req, new),
+            self.mapping(&req, new),
             stat::fstatat(self.root, new, fcntl::AtFlags::empty()),
         )
     }
@@ -563,8 +560,7 @@ impl FilesystemMT for FS {
             Err(e) => return Err(e as libc::c_int),
         };
         match result_entry(
-            &self.owner,
-            &self.mapping(&req, path),
+            self.mapping(&req, path),
             stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
         ) {
             Ok(entry) => Ok(CreatedEntry {
@@ -655,14 +651,12 @@ fn main() -> Result<()> {
             stat::Mode::empty(),
         )
         .context(format!("Failed to open directory {}", dir))?,
-        owner: match mapping {
-            MappingMode::OneToOne => Some(MountOwner {
-                uid: unistd::getuid(),
-                gid: unistd::getgid(),
-            }),
-            _ => None,
+        owner: MountOwner {
+            uid: unistd::getuid(),
+            gid: unistd::getgid(),
         },
         mapping: mapping,
+        metadata: progitoor::metadata::Store::new(&absolute_mount_path).unwrap(),
     };
 
     if !arg.is_present("FOREGROUND") {
