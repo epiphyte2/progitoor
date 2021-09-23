@@ -6,6 +6,12 @@ extern crate libc;
 extern crate nix;
 extern crate time;
 
+use std::ffi::{CString, OsStr, OsString};
+use std::fs::File;
+use std::os::unix::prelude::*;
+use std::path::{Component, Path};
+use std::{fs, io};
+
 use anyhow::{anyhow, Context, Result};
 use clap::{
     arg_enum, crate_authors, crate_description, crate_name, crate_version, value_t, App, Arg,
@@ -16,12 +22,7 @@ use nix::dir::{Dir, Type};
 use nix::fcntl;
 use nix::sys::{stat, statfs};
 use nix::unistd;
-use std::ffi::{CString, OsStr, OsString};
-use std::fs;
-use std::fs::File;
-use std::io;
-use std::os::unix::prelude::*;
-use std::path::{Component, Path};
+use log::{error, info};
 
 use progitoor::metadata::FileInfo;
 
@@ -601,6 +602,16 @@ arg_enum! {
     }
 }
 
+arg_enum! {
+    #[derive(Debug, PartialEq)]
+    pub enum LogLevel {
+        Debug,
+        Info,
+        Warning,
+        Error,
+    }
+}
+
 fn main() -> Result<()> {
     let arg = App::new(crate_name!())
         .version(crate_version!())
@@ -622,8 +633,25 @@ fn main() -> Result<()> {
                 .help("Don't fork - remain in foreground")
                 .required(false),
         )
+        .arg(
+            Arg::with_name("LOGLEVEL")
+                .short("l")
+                .long("loglevel")
+                .help("Specifies the log level")
+                .required(false)
+                .takes_value(true)
+                .default_value("Info"),
+        )
         .arg(Arg::with_name("DIR").index(1).required(true))
         .get_matches();
+
+    let mut base_log_config = fern::Dispatch::new();
+    base_log_config = match value_t!(arg, "LOGLEVEL", LogLevel).context("Could not get loglevel")? {
+        LogLevel::Debug => base_log_config.level(log::LevelFilter::Debug),
+        LogLevel::Info => base_log_config.level(log::LevelFilter::Info),
+        LogLevel::Warning => base_log_config.level(log::LevelFilter::Warn),
+        LogLevel::Error => base_log_config.level(log::LevelFilter::Error),
+    };
 
     let mapping = value_t!(arg, "MODE", MappingMode).unwrap_or_else(|e| e.exit());
     let dir = arg
@@ -640,9 +668,8 @@ fn main() -> Result<()> {
     let absolute_mount_path = fs::canonicalize(mount_path)
         .context(format!("Failed to canonicalize mount path of {}", dir))?;
 
-    // TODO: remove this, or replace with proper logging
-    println!("Mapping mode: {}", mapping);
-    println!("Absolute mount/root dir: {:?}", absolute_mount_path);
+    info!("Mapping mode: {}", mapping);
+    info!("Absolute mount/root dir: {:?}", absolute_mount_path);
 
     let fuse = FS {
         root: fcntl::open(
@@ -659,11 +686,21 @@ fn main() -> Result<()> {
         metadata: progitoor::metadata::Store::new(&absolute_mount_path).unwrap(),
     };
 
-    if !arg.is_present("FOREGROUND") {
+    if arg.is_present("FOREGROUND") {
+        base_log_config
+            .chain(std::io::stdout())
+            .apply()
+            .context("failed to set up logger")?;
+    } else {
+        base_log_config
+            .chain(syslog::unix(syslog::Facility::LOG_USER)?)
+            .apply()
+            .context("failed to set up logger")?;
+
         background().context("failed to daemonize")?;
     }
 
-    fuse_mt::mount(
+    match fuse_mt::mount(
         fuse_mt::FuseMT::new(fuse, 1),
         &absolute_mount_path,
         &[
@@ -674,4 +711,14 @@ fn main() -> Result<()> {
         ],
     )
     .context("Mount failed")
+    {
+        Ok(..) => {
+            info!("progitoor exiting normally");
+            Ok(())
+        }
+        Err(err) => {
+            error!("progitoor exiting abnormally: {}", err);
+            Err(err)
+        }
+    }
 }
