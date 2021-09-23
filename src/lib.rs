@@ -226,9 +226,15 @@ pub mod metadata {
             None
         }
 
-        pub fn update<F>(&self, name: &Path, f: F) -> Result<(), MetadataError>
+        pub fn update<F, G>(
+            &self,
+            name: &Path,
+            updater: F,
+            initializer: G,
+        ) -> Result<(), MetadataError>
         where
             F: FnOnce(&mut FileInfo) -> (),
+            G: FnOnce() -> FileInfo,
         {
             let mut map = match self.map.write() {
                 Ok(map) => map,
@@ -237,12 +243,12 @@ pub mod metadata {
             let info = match map.entry(name.to_path_buf()) {
                 Entry::Occupied(mut e) => {
                     let mut info = e.get_mut();
-                    f(&mut info);
+                    updater(&mut info);
                     info.clone()
                 }
                 Entry::Vacant(e) => {
-                    let mut info = FileInfo::default();
-                    f(&mut info);
+                    let mut info = initializer();
+                    updater(&mut info);
                     e.insert(info);
                     info
                 }
