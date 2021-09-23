@@ -23,6 +23,7 @@ use nix::fcntl;
 use nix::sys::{stat, statfs};
 use nix::unistd;
 use log::{error, info};
+use subprocess::Exec;
 
 use progitoor::metadata::FileInfo;
 
@@ -691,6 +692,20 @@ fn main() -> Result<()> {
             .chain(std::io::stdout())
             .apply()
             .context("failed to set up logger")?;
+
+        let mountpoint = absolute_mount_path.clone();
+        ctrlc::set_handler(move || {
+            info!("Received SIGTERM");
+            match Exec::cmd("umount").arg(&mountpoint).join() {
+                Ok(_) => {
+                    info!("Successfully unmounted {:?}", mountpoint);
+                }
+                Err(err) => {
+                    error!("Error unmounting {:?}: {}", mountpoint, err)
+                }
+            }
+        })
+        .context("failed to set up SIGTERM handler")?;
     } else {
         base_log_config
             .chain(syslog::unix(syslog::Facility::LOG_USER)?)
