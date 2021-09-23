@@ -7,6 +7,7 @@ extern crate time;
 pub mod metadata {
     use nix::unistd;
     use std::borrow::Borrow;
+    use std::collections::hash_map::Entry;
     use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::fs;
@@ -33,6 +34,8 @@ pub mod metadata {
         IOError(#[from] std::io::Error),
         #[error(transparent)]
         ParseIntError(#[from] std::num::ParseIntError),
+        #[error("Write Lock Poisoned")]
+        WriteLockPoisonError,
     }
 
     /// FileInfo tracks file attributes progitoor is going to remap
@@ -223,8 +226,36 @@ pub mod metadata {
             None
         }
 
+        pub fn update<F>(&self, name: &Path, f: F) -> Result<(), MetadataError>
+        where
+            F: FnOnce(&mut FileInfo) -> (),
+        {
+            let mut map = match self.map.write() {
+                Ok(map) => map,
+                Err(_) => return Err(MetadataError::WriteLockPoisonError),
+            };
+            let info = match map.entry(name.to_path_buf()) {
+                Entry::Occupied(mut e) => {
+                    let mut info = e.get_mut();
+                    f(&mut info);
+                    info.clone()
+                }
+                Entry::Vacant(e) => {
+                    let mut info = FileInfo::default();
+                    f(&mut info);
+                    e.insert(info);
+                    info
+                }
+            };
+            self.journal(&FileEntry {
+                name: name.to_path_buf(),
+                info,
+            })?;
+            Ok(())
+        }
+
         /// Persist file metadata
-        pub fn set(&mut self, name: &Path, info: FileInfo) -> Result<(), MetadataError> {
+        pub fn set(&self, name: &Path, info: FileInfo) -> Result<(), MetadataError> {
             self.map
                 .write()
                 .unwrap()
@@ -256,7 +287,7 @@ pub mod metadata {
         }
 
         /// journal appends a FileEntry to the journal file and does a fsync
-        fn journal(&mut self, entry: &FileEntry) -> Result<(), MetadataError> {
+        fn journal(&self, entry: &FileEntry) -> Result<(), MetadataError> {
             let mut line: String = entry.into();
             line += "\n";
 
