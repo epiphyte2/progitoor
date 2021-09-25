@@ -737,6 +737,10 @@ fn main() -> Result<()> {
             &OsString::from("allow_root"),
             &OsString::from("-o"),
             &OsString::from("auto_unmount"),
+            &OsString::from("-o"),
+            &OsString::from("suid"),
+            &OsString::from("-o"),
+            &OsString::from("exec"),
         ],
     )
     .context("Mount failed")
