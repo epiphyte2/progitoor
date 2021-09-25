@@ -184,34 +184,59 @@ impl FS {
         };
         info
     }
+
+    fn stat(&self, path: &Path, fh: Option<u64>) -> nix::Result<stat::FileStat> {
+        match fh {
+            Some(fd) => stat::fstat(fd as RawFd),
+            None => stat::fstatat(
+                self.root,
+                relative_path(path),
+                fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+            ),
+        }
+    }
+
+    fn init_info(&self, path: &Path, fh: Option<u64>) -> FileInfo {
+        match self.stat(path, fh) {
+            Ok(stat) => FileInfo {
+                time: Some(time::Timespec::new(
+                    stat.st_mtime,
+                    stat.st_mtime_nsec as i32,
+                )),
+                mode: Some(stat.st_mode as libc::mode_t),
+                uid: Some(unistd::Uid::from_raw(stat.st_uid)),
+                gid: Some(unistd::Gid::from_raw(stat.st_gid)),
+            },
+            Err(_) => FileInfo::default(),
+        }
+    }
+
+    fn update<F, G>(&self, path: &Path, updater: F, initializer: G) -> ResultEmpty
+    where
+        F: FnOnce(&mut FileInfo) -> (),
+        G: FnOnce() -> FileInfo,
+    {
+        match self.metadata.update(path, updater, initializer) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(libc::ENODEV),
+        }
+    }
 }
 
 impl FilesystemMT for FS {
     fn getattr(&self, req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
-        result_entry(
-            self.mapping(&req, path),
-            match fh {
-                Some(fd) => stat::fstat(fd as RawFd),
-                None => stat::fstatat(
-                    self.root,
-                    relative_path(path),
-                    fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-                ),
-            },
-        )
+        result_entry(self.mapping(&req, path), self.stat(path, fh))
     }
 
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
-        let mode = stat::Mode::from_bits_truncate(mode as stat::mode_t);
-        result_empty(match fh {
-            Some(fd) => stat::fchmod(fd as RawFd, mode),
-            None => stat::fchmodat(
-                Some(self.root),
-                relative_path(path),
-                mode,
-                stat::FchmodatFlags::FollowSymlink,
-            ),
-        })
+        let update = |info: &mut FileInfo| {
+            if let Some(ref mut m) = info.mode {
+                *m &= libc::S_IFMT;
+                *m |= mode & !libc::S_IFMT;
+            };
+        };
+
+        self.update(path, update, || self.init_info(path, fh))
     }
 
     fn chown(
@@ -671,19 +696,21 @@ fn main() -> Result<()> {
     info!("Mapping mode: {}", mapping);
     info!("Absolute mount/root dir: {:?}", absolute_mount_path);
 
+    let mount_fd = fcntl::open(
+        &absolute_mount_path,
+        fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
+        stat::Mode::empty(),
+    )
+    .context(format!("Failed to open directory {}", dir))?;
+
     let fuse = FS {
-        root: fcntl::open(
-            &absolute_mount_path,
-            fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
-            stat::Mode::empty(),
-        )
-        .context(format!("Failed to open directory {}", dir))?,
+        root: mount_fd,
         owner: MountOwner {
             uid: unistd::getuid(),
             gid: unistd::getgid(),
         },
         mapping: mapping,
-        metadata: progitoor::metadata::Store::new(&absolute_mount_path).unwrap(),
+        metadata: progitoor::metadata::Store::new(mount_fd).unwrap(),
     };
 
     if arg.is_present("FOREGROUND") {

@@ -5,15 +5,17 @@ extern crate nix;
 extern crate time;
 
 pub mod metadata {
+    use nix::fcntl;
+    use nix::sys::stat;
     use nix::unistd;
     use std::borrow::Borrow;
     use std::collections::hash_map::Entry;
     use std::collections::HashMap;
     use std::convert::TryFrom;
-    use std::fs;
-    use std::fs::{File, OpenOptions};
+    use std::fs::File;
     use std::io::prelude::*;
     use std::io::{BufReader, LineWriter};
+    use std::os::unix::prelude::*;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, RwLock};
@@ -22,6 +24,7 @@ pub mod metadata {
 
     static FILENAME_JOURNAL: &str = ".progitoor_";
     static FILENAME_DB: &str = ".progitoor";
+    static FILENAME_TMP: &str = ".progitoor$";
 
     /// MetadataError is the general error type for the metadata module
     #[derive(Error, Debug)]
@@ -36,6 +39,8 @@ pub mod metadata {
         ParseIntError(#[from] std::num::ParseIntError),
         #[error("Write Lock Poisoned")]
         WriteLockPoisonError,
+        #[error(transparent)]
+        NIXError(#[from] nix::Error),
     }
 
     /// FileInfo tracks file attributes progitoor is going to remap
@@ -122,15 +127,14 @@ pub mod metadata {
     /// Store is a file metadata store to support progitoor mapping
     pub struct Store {
         map: MtMap,
-        path_db: PathBuf,
-        path_journal: PathBuf,
+        root: RawFd,
         flusher_thread_run: Arc<AtomicBool>,
     }
 
     impl Store {
         /// Construct a new Store instance
-        pub fn new(base_dir: &Path) -> Result<Self, MetadataError> {
-            match Self::new_without_flusher_thread(base_dir) {
+        pub fn new(root: RawFd) -> Result<Self, MetadataError> {
+            match Self::new_without_flusher_thread(root) {
                 Ok(store) => {
                     store.start_flusher_thread();
                     Ok(store)
@@ -140,24 +144,16 @@ pub mod metadata {
         }
 
         /// Construct a Store instance that doesn't start a periodic flusher thread
-        pub fn new_without_flusher_thread(base_dir: &Path) -> Result<Self, MetadataError> {
-            if !base_dir.is_dir() {
-                return Err(MetadataError::InvalidMetadataStorePathError(
-                    base_dir.to_path_buf(),
-                ));
-            }
-
+        pub fn new_without_flusher_thread(root: RawFd) -> Result<Self, MetadataError> {
             let mut store = Self {
                 map: Arc::new(RwLock::new(HashMap::new())),
-                path_db: base_dir.join(FILENAME_DB),
-                path_journal: base_dir.join(FILENAME_JOURNAL),
+                root: root,
                 flusher_thread_run: Arc::new(AtomicBool::new(true)),
             };
 
-            Store::load_file(&mut store.map, &store.path_db)?;
+            Store::load_file(&mut store.map, root, FILENAME_DB)?;
 
-            if store.path_journal.exists() {
-                Store::load_file(&mut store.map, &store.path_journal)?;
+            if Store::load_file(&mut store.map, root, FILENAME_JOURNAL)? {
                 store
                     .internal_flush()
                     .expect("error during flush in metadata store constructor")
@@ -169,52 +165,57 @@ pub mod metadata {
         /// Start the periodic flusher thread
         fn start_flusher_thread(&self) {
             let thread_map = Arc::clone(&self.map);
-            let thread_path_db = self.path_db.clone();
-            let thread_journal_db = self.path_journal.clone();
+            let thread_root = self.root.clone();
             let thread_flag = self.flusher_thread_run.clone();
 
             std::thread::spawn(move || {
                 while thread_flag.load(Ordering::SeqCst) {
                     // TODO: make sleep configurable
                     std::thread::sleep(std::time::Duration::from_secs(2));
-                    Store::flush(&thread_map, &thread_path_db, &thread_journal_db)
+                    Store::flush(&thread_map, thread_root)
                         .expect("metadata store periodic flush thread failed");
                 }
             });
         }
 
         /// load_file is used for loading both the db and journal
-        fn load_file(map: &mut MtMap, path: &Path) -> Result<(), MetadataError> {
-            if path.exists() {
-                let file_db = OpenOptions::new().read(true).open(path)?;
-                let reader = BufReader::new(file_db);
-                for res in reader.lines() {
-                    match res {
-                        Ok(line) => {
-                            match FileEntry::try_from(&*line) {
-                                Ok(parse) => {
-                                    if parse.info.mode.unwrap_or_default() == 0 {
-                                        // Tombstone value
-                                        map.write().unwrap().remove(parse.name.as_path());
+        fn load_file(map: &mut MtMap, root: RawFd, file: &str) -> Result<bool, MetadataError> {
+            let file_db = unsafe {
+                File::from_raw_fd(
+                    match fcntl::openat(root, file, fcntl::OFlag::O_RDONLY, stat::Mode::empty()) {
+                        Ok(fd) => fd,
+                        Err(nix::Error::ENOENT) => return Ok(false),
+                        Err(e) => return Err(MetadataError::NIXError(e)),
+                    },
+                )
+            };
+            let reader = BufReader::new(file_db);
+            for res in reader.lines() {
+                match res {
+                    Ok(line) => {
+                        match FileEntry::try_from(&*line) {
+                            Ok(parse) => {
+                                if parse.info.mode.unwrap_or_default() == 0 {
+                                    // Tombstone value
+                                    map.write().unwrap().remove(parse.name.as_path());
 
-                                        continue;
-                                    }
-
-                                    map.write()
-                                        .unwrap()
-                                        .entry(parse.name.clone())
-                                        .and_modify(|v| *v = parse.info)
-                                        .or_insert(parse.info);
+                                    continue;
                                 }
-                                Err(e) => return Err(e),
+
+                                map.write()
+                                    .unwrap()
+                                    .entry(parse.name.clone())
+                                    .and_modify(|v| *v = parse.info)
+                                    .or_insert(parse.info);
                             }
+                            Err(e) => return Err(e),
                         }
-                        Err(e) => return Err(MetadataError::IOError(e)),
                     }
+                    Err(e) => return Err(MetadataError::IOError(e)),
                 }
             }
 
-            Ok(())
+            Ok(true)
         }
 
         /// Look up file metadata
@@ -256,8 +257,7 @@ pub mod metadata {
             self.journal(&FileEntry {
                 name: name.to_path_buf(),
                 info,
-            })?;
-            Ok(())
+            })
         }
 
         /// Persist file metadata
@@ -273,9 +273,7 @@ pub mod metadata {
                 name: name.to_path_buf(),
                 info,
             };
-            self.journal(&entry)?;
-
-            Ok(())
+            Ok(self.journal(&entry)?)
         }
 
         /// Delete file metadata
@@ -287,9 +285,7 @@ pub mod metadata {
                 name: name.to_path_buf(),
                 info: ZERO_FILE_INFO,
             };
-            self.journal(&entry)?;
-
-            Ok(())
+            self.journal(&entry)
         }
 
         /// journal appends a FileEntry to the journal file and does a fsync
@@ -297,33 +293,48 @@ pub mod metadata {
             let mut line: String = entry.into();
             line += "\n";
 
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.path_journal)?;
+            let file = unsafe {
+                File::from_raw_fd(fcntl::openat(
+                    self.root,
+                    FILENAME_JOURNAL,
+                    fcntl::OFlag::O_CREAT | fcntl::OFlag::O_WRONLY | fcntl::OFlag::O_APPEND,
+                    stat::Mode::S_IRUSR | stat::Mode::S_IWUSR,
+                )?)
+            };
 
             let mut writer = LineWriter::new(&file);
 
             // Note: LineWriter will flush() here because of the newline
             writer.write_all(line.as_ref())?;
 
-            file.sync_all()?;
-
-            Ok(())
+            Ok(file.sync_all()?)
         }
 
         /// flush writes the in-memory database to disk and closes/deletes the journal
-        fn flush(map: &MtMap, path_db: &Path, path_journal: &Path) -> Result<(), MetadataError> {
-            // Create or open database
-            let mut file_db;
-            if path_db.exists() {
-                file_db = OpenOptions::new().write(true).open(path_db)?;
-            } else {
-                file_db = File::create(path_db)?;
-            }
+        fn flush(map: &MtMap, root: RawFd) -> Result<(), MetadataError> {
+            // Don't want updates to map during flush and one flush at a time
+            let map = match map.write() {
+                Ok(map) => map,
+                Err(_) => return Err(MetadataError::WriteLockPoisonError),
+            };
 
-            // Dump map to database
-            for (k, v) in map.read().unwrap().iter() {
+            // Check for existing journal
+            match stat::fstatat(root, FILENAME_JOURNAL, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) {
+                Ok(_) => (),
+                Err(nix::Error::ENOENT) => return Ok(()), // nothing to do
+                Err(e) => return Err(MetadataError::NIXError(e)),
+            };
+
+            // Durably dump map to database
+            let mut file_tmp = unsafe {
+                File::from_raw_fd(fcntl::openat(
+                    root,
+                    FILENAME_TMP,
+                    fcntl::OFlag::O_CREAT | fcntl::OFlag::O_TRUNC | fcntl::OFlag::O_WRONLY,
+                    stat::Mode::S_IRUSR | stat::Mode::S_IWUSR,
+                )?)
+            };
+            for (k, v) in map.iter() {
                 let entry = FileEntry {
                     name: k.to_path_buf(),
                     info: *v,
@@ -331,20 +342,22 @@ pub mod metadata {
                 let mut line: String = entry.borrow().into();
                 line += "\n";
 
-                file_db.write_all(line.as_ref())?;
+                file_tmp.write_all(line.as_ref())?;
             }
+            file_tmp.sync_all()?;
+            fcntl::renameat(Some(root), FILENAME_TMP, Some(root), FILENAME_DB)?;
 
-            // Delete journal
-            if path_journal.exists() {
-                fs::remove_file(path_journal)?;
-            }
-
-            Ok(())
+            // In memory map was authoritative, delete the journal
+            Ok(unistd::unlinkat(
+                Some(root),
+                FILENAME_JOURNAL,
+                unistd::UnlinkatFlags::NoRemoveDir,
+            )?)
         }
 
         /// Non-static version of flush()
         pub(crate) fn internal_flush(&mut self) -> Result<(), MetadataError> {
-            Store::flush(&self.map, &self.path_db, &self.path_journal)
+            Store::flush(&self.map, self.root)
         }
     }
 
