@@ -34,7 +34,6 @@ struct MountOwner {
 struct FS {
     root: RawFd,
     owner: MountOwner,
-    mapping: MappingMode,
     metadata: progitoor::metadata::Store,
 }
 
@@ -60,21 +59,18 @@ fn utime(time: Option<time::Timespec>) -> nix::sys::time::TimeSpec {
     })
 }
 
-fn result_entry(
-    mapping: Option<FileInfo>,
-    result: Result<stat::FileStat, nix::Error>,
-) -> ResultEntry {
+fn result_entry(mapping: FileInfo, result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
     match result {
         Ok(stat) => {
-            let mode = match mapping {
-                Some(ref info) if matches!(info.mode, Some(_)) => info.mode.unwrap(),
-                _ => stat.st_mode as libc::mode_t,
+            let mode = match mapping.mode {
+                Some(mode) => mode,
+                None => stat.st_mode as libc::mode_t,
             };
             let atime = time::Timespec::new(stat.st_atime, stat.st_atime_nsec as i32);
             let ctime = time::Timespec::new(stat.st_ctime, stat.st_ctime_nsec as i32);
-            let mtime = match mapping {
-                Some(ref info) if matches!(info.time, Some(_)) => info.time.unwrap(),
-                _ => time::Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
+            let mtime = match mapping.time {
+                Some(time) => time,
+                None => time::Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
             };
             Ok((
                 time::Timespec::new(1, 0),
@@ -96,17 +92,13 @@ fn result_entry(
                     },
                     perm: (mode & !libc::S_IFMT) as u16,
                     nlink: stat.st_nlink as u32,
-                    uid: match mapping {
-                        Some(ref info) if matches!(info.uid, Some(_)) => {
-                            info.uid.unwrap().as_raw() as u32
-                        }
-                        _ => stat.st_uid,
+                    uid: match mapping.uid {
+                        Some(uid) => uid.as_raw() as u32,
+                        None => stat.st_uid,
                     },
-                    gid: match mapping {
-                        Some(ref info) if matches!(info.gid, Some(_)) => {
-                            info.gid.unwrap().as_raw() as u32
-                        }
-                        _ => stat.st_gid,
+                    gid: match mapping.gid {
+                        Some(gid) => gid.as_raw() as u32,
+                        None => stat.st_gid,
                     },
                     rdev: stat.st_rdev as u32,
                     flags: 0,
@@ -162,25 +154,17 @@ fn result_statfs(result: Result<statfs::Statfs, nix::Error>) -> ResultStatfs {
 }
 
 impl FS {
-    fn mapping(&self, req: &RequestInfo, path: &Path) -> Option<FileInfo> {
-        let mut info = match self.mapping {
-            MappingMode::Full => self.metadata.get(path),
-            MappingMode::OneToOne => Some(FileInfo {
-                uid: Some(unistd::Uid::from_raw(0)),
-                gid: Some(unistd::Gid::from_raw(0)),
-                ..Default::default()
-            }),
-            _ => None,
-        };
+    fn mapping(&self, req: &RequestInfo, path: &Path) -> FileInfo {
+        let mut info = self.metadata.get(path).unwrap_or(FileInfo {
+            uid: Some(unistd::Uid::from_raw(0)),
+            gid: Some(unistd::Gid::from_raw(0)),
+            ..Default::default()
+        });
         if unistd::Uid::from_raw(req.uid as libc::uid_t) == self.owner.uid {
-            if let Some(ref mut info) = info {
-                info.uid.take();
-            }
+            info.uid.take();
         };
         if unistd::Gid::from_raw(req.gid as libc::gid_t) == self.owner.gid {
-            if let Some(ref mut info) = info {
-                info.gid.take();
-            }
+            info.gid.take();
         };
         info
     }
@@ -251,26 +235,35 @@ impl FilesystemMT for FS {
 
     fn chown(
         &self,
-        _req: RequestInfo,
+        req: RequestInfo,
         path: &Path,
         fh: Option<u64>,
         uid: Option<u32>,
         gid: Option<u32>,
     ) -> ResultEmpty {
         let uid = match uid {
-            Some(uid) => match self.mapping {
-                MappingMode::OneToOne if uid == 0 => Some(self.owner.uid),
-                _ => Some(unistd::Uid::from_raw(uid as libc::uid_t)),
-            },
+            Some(uid) => Some(unistd::Uid::from_raw(uid as libc::uid_t)),
             None => None,
         };
         let gid = match gid {
-            Some(gid) => match self.mapping {
-                MappingMode::OneToOne if gid == 0 => Some(self.owner.gid),
-                _ => Some(unistd::Gid::from_raw(gid as libc::gid_t)),
-            },
+            Some(gid) => Some(unistd::Gid::from_raw(gid as libc::gid_t)),
             None => None,
         };
+        let req_uid = unistd::Uid::from_raw(req.uid as libc::uid_t);
+        let req_gid = unistd::Gid::from_raw(req.gid as libc::gid_t);
+        if req_uid != self.owner.uid || req_gid != self.owner.gid {
+            let update = |info: &mut FileInfo| {
+                if uid.is_some() && req_uid != self.owner.uid {
+                    info.uid = uid;
+                };
+                if gid.is_some() && req_gid != self.owner.gid {
+                    info.gid = gid;
+                };
+            };
+            return self.update(path, update, || self.init_info(path, fh));
+        };
+
+        // not sure pass through is useful, but is consistent with getattr() for owner
         result_empty(match fh {
             Some(fd) => unistd::fchown(fd as RawFd, uid, gid),
             None => unistd::fchownat(
@@ -630,15 +623,6 @@ fn background() -> std::result::Result<(), DaemonizeError> {
 
 arg_enum! {
     #[derive(Debug, PartialEq)]
-    pub enum MappingMode {
-        Full,
-        OneToOne,
-        PassThrough
-    }
-}
-
-arg_enum! {
-    #[derive(Debug, PartialEq)]
     pub enum LogLevel {
         Debug,
         Info,
@@ -652,15 +636,6 @@ fn main() -> Result<()> {
         .version(crate_version!())
         .author(crate_authors!("\n"))
         .about(crate_description!())
-        .arg(
-            Arg::with_name("MODE")
-                .short("m")
-                .long("mode")
-                .help("Specifies the mapping mode")
-                .required(false)
-                .takes_value(true)
-                .default_value("Full"),
-        )
         .arg(
             Arg::with_name("FOREGROUND")
                 .short("f")
@@ -688,7 +663,6 @@ fn main() -> Result<()> {
         LogLevel::Error => base_log_config.level(log::LevelFilter::Error),
     };
 
-    let mapping = value_t!(arg, "MODE", MappingMode).unwrap_or_else(|e| e.exit());
     let dir = arg
         .value_of("DIR")
         .context("Could not get base/mount point directory")?;
@@ -703,7 +677,6 @@ fn main() -> Result<()> {
     let absolute_mount_path = fs::canonicalize(mount_path)
         .context(format!("Failed to canonicalize mount path of {}", dir))?;
 
-    info!("Mapping mode: {}", mapping);
     info!("Absolute mount/root dir: {:?}", absolute_mount_path);
 
     let mount_fd = fcntl::open(
@@ -719,7 +692,6 @@ fn main() -> Result<()> {
             uid: unistd::getuid(),
             gid: unistd::getgid(),
         },
-        mapping: mapping,
         metadata: progitoor::metadata::Store::new(mount_fd).unwrap(),
     };
 
