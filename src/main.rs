@@ -235,8 +235,18 @@ impl FilesystemMT for FS {
                 *m |= mode & !libc::S_IFMT;
             };
         };
-
-        self.update(path, update, || self.init_info(path, fh))
+        self.update(path, update, || self.init_info(path, fh))?;
+        let mut mode = stat::Mode::from_bits_truncate(mode as stat::mode_t);
+        mode &= stat::Mode::S_IRWXU | stat::Mode::S_IRWXG | stat::Mode::S_IRWXO;
+        result_empty(match fh {
+            Some(fd) => stat::fchmod(fd as RawFd, mode),
+            None => stat::fchmodat(
+                Some(self.root),
+                relative_path(path),
+                mode,
+                stat::FchmodatFlags::FollowSymlink,
+            ),
+        })
     }
 
     fn chown(
