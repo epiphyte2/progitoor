@@ -307,6 +307,9 @@ impl FilesystemMT for FS {
         atime: Option<time::Timespec>,
         mtime: Option<time::Timespec>,
     ) -> ResultEmpty {
+        if atime.is_some() {
+            self.update(path, |info| info.time = atime, || self.init_info(path, fh))?;
+        };
         result_empty(match fh {
             Some(fh) => stat::futimens(fh as RawFd, &utime(atime), &utime(mtime)),
             None => stat::utimensat(
