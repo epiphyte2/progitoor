@@ -525,12 +525,12 @@ impl FilesystemMT for FS {
     }
 
     fn readdir(&self, _req: RequestInfo, _path: &Path, fh: u64) -> ResultReaddir {
-        let dir = match Dir::from_fd(fh as RawFd) {
+        let mut dir = match Dir::from_fd(fh as RawFd) {
             Ok(d) => d,
             Err(e) => return Err(e as libc::c_int),
         };
         let mut entries = Vec::<DirectoryEntry>::new();
-        for entry in dir {
+        for entry in dir.iter() {
             match entry {
                 Ok(entry) => {
                     entries.push(DirectoryEntry {
@@ -552,6 +552,7 @@ impl FilesystemMT for FS {
                 Err(_e) => continue,
             }
         }
+        std::mem::forget(dir); // don't close directory on drop
         Ok(entries)
     }
 
