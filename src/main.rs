@@ -59,6 +59,10 @@ fn utime(time: Option<time::Timespec>) -> nix::sys::time::TimeSpec {
     })
 }
 
+fn restrict_mode(mode: u32) -> libc::mode_t {
+    mode as libc::mode_t & !(libc::S_IFMT | libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX)
+}
+
 fn result_entry(mapping: FileInfo, result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
     match result {
         Ok(stat) => {
@@ -356,7 +360,7 @@ impl FilesystemMT for FS {
             if libc::mknodat(
                 self.root as libc::c_int,
                 CString::from_vec_unchecked(path.as_os_str().as_bytes().to_vec()).as_ptr(),
-                (mode & !(libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX)) as libc::mode_t,
+                restrict_mode(mode),
                 rdev as libc::dev_t,
             ) == -1
             {
@@ -371,14 +375,13 @@ impl FilesystemMT for FS {
     fn mkdir(&self, req: RequestInfo, parent: &Path, name: &OsStr, mode: u32) -> ResultEntry {
         let path = &relative_path(parent).join(name);
         result_empty(stat::mkdirat(
-            self.root as RawFd,
+            self.root,
             path,
-            stat::Mode::from_bits_truncate(mode as stat::mode_t),
+            stat::Mode::from_bits_truncate(restrict_mode(mode)),
         ))?;
-        result_entry(
-            self.mapping(&req, path),
-            stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
-        )
+        let stat = self.stat(path, None, fcntl::AtFlags::empty());
+        self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
+        result_entry(self.mapping(&req, path), stat)
     }
 
     fn unlink(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
