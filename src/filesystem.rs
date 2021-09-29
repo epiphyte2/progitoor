@@ -32,11 +32,11 @@ pub struct FS {
     pub metadata: crate::metadata::Store,
 }
 
-fn relative_path(path: &Path) -> &Path {
-    let mut i = path.components();
-    assert!(matches!(i.next(), Some(Component::RootDir)));
+fn relative_path(absolute_path: &Path) -> &Path {
+    let mut i = absolute_path.components();
+    assert!(matches!(i.next(), Some(Component::RootDir))); // Not absolute!
     match i.next() {
-        Some(_) => path.strip_prefix("/").unwrap(),
+        Some(_) => absolute_path.strip_prefix("/").unwrap(),
         None => Path::new("."),
     }
 }
