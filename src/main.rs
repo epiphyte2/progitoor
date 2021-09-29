@@ -195,13 +195,13 @@ impl FS {
 
     fn stat(
         &self,
-        path: &Path,
+        rel_path: &Path,
         fh: Option<u64>,
         flags: fcntl::AtFlags,
     ) -> nix::Result<stat::FileStat> {
         match fh {
             Some(fd) => stat::fstat(fd as RawFd),
-            None => stat::fstatat(self.root, relative_path(path), flags),
+            None => stat::fstatat(self.root, rel_path, flags),
         }
     }
 
@@ -221,7 +221,7 @@ impl FilesystemMT for FS {
     fn getattr(&self, req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
         result_entry(
             self.mapping(&req, path),
-            self.stat(path, fh, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
+            self.stat(relative_path(path), fh, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
         )
     }
 
