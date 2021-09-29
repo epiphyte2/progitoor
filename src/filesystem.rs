@@ -620,3 +620,39 @@ impl FilesystemMT for FS {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::filesystem::*;
+
+    #[test]
+    #[should_panic]
+    fn relative_path_test_panic() {
+        let _ = relative_path(Path::new("foo"));
+    }
+
+    #[test]
+    fn relative_path_test_root() {
+        assert_eq!(relative_path(Path::new("/")), Path::new("."));
+    }
+
+    #[test]
+    fn relative_path_test_1component() {
+        assert_eq!(relative_path(Path::new("/foo")), Path::new("foo"));
+    }
+
+    #[test]
+    fn relative_path_test_1component_slash() {
+        assert_eq!(relative_path(Path::new("/foo/")), Path::new("foo"));
+    }
+
+    #[test]
+    fn relative_path_test_2components() {
+        assert_eq!(relative_path(Path::new("/foo/bar")), Path::new("foo/bar"));
+    }
+
+    #[test]
+    fn relative_path_test_2components_slash() {
+        assert_eq!(relative_path(Path::new("/foo/bar/")), Path::new("foo/bar"));
+    }
+}
