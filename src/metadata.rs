@@ -366,31 +366,15 @@ impl Drop for Store {
 
 #[cfg(test)]
 mod test {
+    use super::nix::fcntl;
+    use super::nix::sys::stat;
     use crate::metadata::{FileEntry, FileInfo, Store};
     use nix::unistd;
     use std::convert::TryFrom;
-    use std::fs::OpenOptions;
-    use std::io::{BufRead, BufReader};
     use std::mem::forget;
     use std::path::Path;
     use tempfile::tempdir;
     use time::Timespec;
-
-    fn dump_file(path: &Path) {
-        let file = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .expect("could not open file");
-        let reader = BufReader::new(file);
-        for res in reader.lines() {
-            let line = res.expect("could not read line");
-            println!(
-                "{}: {}",
-                path.to_str().expect("could not get string from path"),
-                line
-            )
-        }
-    }
 
     #[test]
     fn basic_store_test() {
@@ -413,7 +397,14 @@ mod test {
 
         assert!(dir_path.exists());
 
-        let mut s = Store::new(dir.path()).unwrap();
+        let mount_fd = fcntl::open(
+            dir_path.into(),
+            fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
+            stat::Mode::empty(),
+        )
+        .expect("could not open root");
+
+        let mut s = Store::new(mount_fd).unwrap();
 
         let journal_file_pathbuf = dir_path.join(".progitoor_journal_v1_dont_commit_me");
         let journal_file = journal_file_pathbuf.as_path();
@@ -462,12 +453,16 @@ mod test {
         let dir_path = dir_pathbuf.as_path();
         let journal_file_pathbuf = dir_path.join(".progitoor_journal_v1_dont_commit_me");
         let journal_file = journal_file_pathbuf.as_path();
-        let db_file_pathbuf = dir_path.join(".progitoor_db_v1");
-        let db_file = db_file_pathbuf.as_path();
+        let mount_fd = fcntl::open(
+            dir_path.into(),
+            fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
+            stat::Mode::empty(),
+        )
+        .expect("could not open root");
 
         {
             let mut s =
-                Store::new_without_flusher_thread(dir.path()).expect("failed to construct store");
+                Store::new_without_flusher_thread(mount_fd).expect("failed to construct store");
 
             s.set(Path::new("/f1"), f1).expect("failed to set /f1");
             s.internal_flush().expect("failed to flush"); // so we get a db on disk, with one entry
@@ -482,12 +477,8 @@ mod test {
             forget(s); // Simulate crash
         }
 
-        dump_file(journal_file);
-        dump_file(db_file);
-
         {
-            let s =
-                Store::new_without_flusher_thread(dir.path()).expect("failed to construct store");
+            let s = Store::new_without_flusher_thread(mount_fd).expect("failed to construct store");
 
             // After new() has run, the journal should have been replayed and deleted
             assert!(!journal_file.exists());
