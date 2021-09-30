@@ -59,7 +59,7 @@ fn utime(time: Option<time::Timespec>) -> nix::sys::time::TimeSpec {
 }
 
 fn restrict_mode(mode: u32) -> libc::mode_t {
-    mode as libc::mode_t & !(libc::S_IFMT | libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX)
+    mode as libc::mode_t & !(libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX)
 }
 
 fn result_entry(mapping: FileInfo, result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
@@ -379,6 +379,7 @@ impl FilesystemMT for FS {
     }
 
     fn mkdir(&self, req: RequestInfo, parent: &Path, name: &OsStr, mode: u32) -> ResultEntry {
+        let mode = mode | libc::S_IFDIR;
         let path = parent.join(name);
         let path = relative_path(&path);
         result_empty(stat::mkdirat(
