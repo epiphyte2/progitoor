@@ -214,13 +214,15 @@ impl FS {
 
 impl FilesystemMT for FS {
     fn getattr(&self, req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
+        let path = relative_path(path);
         result_entry(
             self.mapping(&req, path),
-            self.stat(relative_path(path), fh, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
+            self.stat(path, fh, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
         )
     }
 
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
+        let path = relative_path(path);
         let update = |info: &mut FileInfo| {
             if let Some(ref mut m) = info.mode {
                 *m &= libc::S_IFMT;
@@ -236,7 +238,7 @@ impl FilesystemMT for FS {
             Some(fd) => stat::fchmod(fd as RawFd, mode),
             None => stat::fchmodat(
                 Some(self.root),
-                relative_path(path),
+                path,
                 mode,
                 stat::FchmodatFlags::FollowSymlink,
             ),
@@ -251,6 +253,7 @@ impl FilesystemMT for FS {
         uid: Option<u32>,
         gid: Option<u32>,
     ) -> ResultEmpty {
+        let path = relative_path(path);
         let uid = match uid {
             Some(uid) => Some(unistd::Uid::from_raw(uid as libc::uid_t)),
             None => None,
@@ -280,7 +283,7 @@ impl FilesystemMT for FS {
             Some(fd) => unistd::fchown(fd as RawFd, uid, gid),
             None => unistd::fchownat(
                 Some(self.root),
-                relative_path(path),
+                path,
                 uid,
                 gid,
                 unistd::FchownatFlags::FollowSymlink,
@@ -289,17 +292,13 @@ impl FilesystemMT for FS {
     }
 
     fn truncate(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, size: u64) -> ResultEmpty {
+        let path = relative_path(path);
         let fd = match fh {
             Some(fd) => fd,
             None => {
                 result_open(
                     0,
-                    fcntl::openat(
-                        self.root,
-                        relative_path(path),
-                        fcntl::OFlag::O_WRONLY,
-                        stat::Mode::empty(),
-                    ),
+                    fcntl::openat(self.root, path, fcntl::OFlag::O_WRONLY, stat::Mode::empty()),
                 )?
                 .0
             }
@@ -319,6 +318,7 @@ impl FilesystemMT for FS {
         atime: Option<time::Timespec>,
         mtime: Option<time::Timespec>,
     ) -> ResultEmpty {
+        let path = relative_path(path);
         if atime.is_some() {
             self.update(
                 path,
@@ -330,7 +330,7 @@ impl FilesystemMT for FS {
             Some(fh) => stat::futimens(fh as RawFd, &utime(atime), &utime(mtime)),
             None => stat::utimensat(
                 Some(self.root),
-                relative_path(path),
+                path,
                 &utime(atime),
                 &utime(mtime),
                 stat::UtimensatFlags::FollowSymlink,
