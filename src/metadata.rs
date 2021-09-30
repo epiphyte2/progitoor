@@ -404,7 +404,7 @@ mod test {
         )
         .expect("could not open root");
 
-        let mut s = Store::new(mount_fd).unwrap();
+        let s = Store::new(mount_fd).unwrap();
 
         let journal_file_pathbuf = dir_path.join(".progitoor_journal_v1_dont_commit_me");
         let journal_file = journal_file_pathbuf.as_path();
