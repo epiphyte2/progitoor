@@ -357,7 +357,8 @@ impl FilesystemMT for FS {
         mode: u32,
         rdev: u32,
     ) -> ResultEntry {
-        let path = &relative_path(parent).join(name);
+        let path = parent.join(name);
+        let path = relative_path(&path);
         unsafe {
             if libc::mknodat(
                 self.root as libc::c_int,
@@ -375,7 +376,8 @@ impl FilesystemMT for FS {
     }
 
     fn mkdir(&self, req: RequestInfo, parent: &Path, name: &OsStr, mode: u32) -> ResultEntry {
-        let path = &relative_path(parent).join(name);
+        let path = parent.join(name);
+        let path = relative_path(&path);
         result_empty(stat::mkdirat(
             self.root,
             path,
@@ -387,7 +389,8 @@ impl FilesystemMT for FS {
     }
 
     fn unlink(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
-        let path = &relative_path(parent).join(name);
+        let path = parent.join(name);
+        let path = relative_path(&path);
         self.remove(path)?;
         result_empty(unistd::unlinkat(
             Some(self.root),
@@ -397,7 +400,8 @@ impl FilesystemMT for FS {
     }
 
     fn rmdir(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
-        let path = &relative_path(parent).join(name);
+        let path = parent.join(name);
+        let path = relative_path(&path);
         self.remove(path)?;
         result_empty(unistd::unlinkat(
             Some(self.root),
@@ -407,7 +411,8 @@ impl FilesystemMT for FS {
     }
 
     fn symlink(&self, req: RequestInfo, parent: &Path, name: &OsStr, target: &Path) -> ResultEntry {
-        let path = &relative_path(parent).join(name);
+        let path = parent.join(name);
+        let path = relative_path(&path);
         result_empty(unistd::symlinkat(target, Some(self.root), path))?;
         result_entry(
             self.mapping(&req, path),
@@ -423,8 +428,10 @@ impl FilesystemMT for FS {
         new_parent: &Path,
         new_name: &OsStr,
     ) -> ResultEmpty {
-        let old = &relative_path(old_parent).join(old_name);
-        let new = &relative_path(new_parent).join(new_name);
+        let old = old_parent.join(old_name);
+        let old = relative_path(&old);
+        let new = new_parent.join(new_name);
+        let new = relative_path(&new);
         result_empty(fcntl::renameat(Some(self.root), old, Some(self.root), new))
     }
 
@@ -436,7 +443,8 @@ impl FilesystemMT for FS {
         new_name: &OsStr,
     ) -> ResultEntry {
         let old = relative_path(path);
-        let new = &relative_path(new_parent).join(new_name);
+        let new = new_parent.join(new_name);
+        let new = relative_path(&new);
         result_empty(unistd::linkat(
             Some(self.root),
             old,
@@ -604,7 +612,8 @@ impl FilesystemMT for FS {
         mode: u32,
         flags: u32,
     ) -> ResultCreate {
-        let path = &relative_path(parent).join(name);
+        let path = parent.join(name);
+        let path = relative_path(&path);
         let flags = fcntl::OFlag::from_bits_truncate(flags as libc::c_int)
             | fcntl::OFlag::O_CREAT
             | fcntl::OFlag::O_EXCL;
