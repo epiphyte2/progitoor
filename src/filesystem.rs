@@ -638,7 +638,12 @@ impl FilesystemMT for FS {
             Err(e) => return Err(e as libc::c_int),
         };
         let stat = self.stat(path, Some(fd as u64), fcntl::AtFlags::empty());
-        self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
+        let update = |info: &mut FileInfo| {
+            info.mode = Some(mode);
+            info.uid = Some(unistd::Uid::from_raw(req.uid));
+            info.gid = Some(unistd::Gid::from_raw(req.gid));
+        };
+        self.update(path, update, || init_info(stat))?;
         match result_entry(self.mapping(&req, path), stat) {
             Ok(entry) => Ok(CreatedEntry {
                 ttl: entry.0,
