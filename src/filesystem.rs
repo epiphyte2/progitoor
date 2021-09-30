@@ -601,15 +601,14 @@ impl FilesystemMT for FS {
             self.root,
             path,
             flags,
-            stat::Mode::from_bits_truncate(mode as stat::mode_t),
+            stat::Mode::from_bits_truncate(restrict_mode(mode)),
         ) {
             Ok(fd) => fd as RawFd,
             Err(e) => return Err(e as libc::c_int),
         };
-        match result_entry(
-            self.mapping(&req, path),
-            stat::fstatat(self.root, path, fcntl::AtFlags::empty()),
-        ) {
+        let stat = self.stat(path, Some(fd as u64), fcntl::AtFlags::empty());
+        self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
+        match result_entry(self.mapping(&req, path), stat) {
             Ok(entry) => Ok(CreatedEntry {
                 ttl: entry.0,
                 attr: entry.1,
