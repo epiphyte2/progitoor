@@ -243,8 +243,7 @@ impl FilesystemMT for FS {
         self.update(path, update, || {
             init_info(self.stat(path, fh, fcntl::AtFlags::empty()))
         })?;
-        let mut mode = stat::Mode::from_bits_truncate(mode as stat::mode_t);
-        mode &= stat::Mode::S_IRWXU | stat::Mode::S_IRWXG | stat::Mode::S_IRWXO;
+        let mode = stat::Mode::from_bits_truncate(restrict_mode(mode));
         result_empty(match fh {
             Some(fd) => stat::fchmod(fd as RawFd, mode),
             None => stat::fchmodat(
