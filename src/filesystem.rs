@@ -210,6 +210,13 @@ impl FS {
             Err(_) => Err(libc::ENODEV),
         }
     }
+
+    fn remove(&self, path: &Path) -> ResultEmpty {
+        match self.metadata.remove(path) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(libc::ENODEV),
+        }
+    }
 }
 
 impl FilesystemMT for FS {
@@ -380,17 +387,21 @@ impl FilesystemMT for FS {
     }
 
     fn unlink(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
+        let path = &relative_path(parent).join(name);
+        self.remove(path)?;
         result_empty(unistd::unlinkat(
             Some(self.root),
-            &relative_path(parent).join(name),
+            path,
             unistd::UnlinkatFlags::NoRemoveDir,
         ))
     }
 
     fn rmdir(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
+        let path = &relative_path(parent).join(name);
+        self.remove(path)?;
         result_empty(unistd::unlinkat(
             Some(self.root),
-            &relative_path(parent).join(name),
+            path,
             unistd::UnlinkatFlags::RemoveDir,
         ))
     }

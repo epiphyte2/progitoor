@@ -271,7 +271,7 @@ impl Store {
     }
 
     /// Delete file metadata
-    pub fn remove(&mut self, name: &Path) -> Result<(), MetadataError> {
+    pub fn remove(&self, name: &Path) -> Result<(), MetadataError> {
         self.map.write().unwrap().remove(name);
 
         // Write tombstone value to journal
