@@ -9,7 +9,7 @@ extern crate time;
 use std::ffi::{CString, OsStr, OsString};
 use std::io;
 use std::os::unix::prelude::*;
-use std::path::{Component, Path};
+use std::path::Path;
 
 use anyhow::Result;
 
@@ -32,12 +32,16 @@ pub struct FS {
     pub metadata: crate::metadata::Store,
 }
 
-fn relative_path(absolute_path: &Path) -> &Path {
-    let mut i = absolute_path.components();
-    assert!(matches!(i.next(), Some(Component::RootDir))); // Not absolute!
-    match i.next() {
-        Some(_) => absolute_path.strip_prefix("/").unwrap(),
-        None => Path::new("."),
+fn relative_path(path: &Path) -> &Path {
+    match path.strip_prefix("/") {
+        Ok(path) => {
+            if path.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                path
+            }
+        }
+        Err(_) => path,
     }
 }
 
@@ -643,12 +647,6 @@ impl FilesystemMT for FS {
 #[cfg(test)]
 mod test {
     use crate::filesystem::*;
-
-    #[test]
-    #[should_panic]
-    fn relative_path_test_panic() {
-        let _ = relative_path(Path::new("foo"));
-    }
 
     #[test]
     fn relative_path_test_root() {
