@@ -453,6 +453,9 @@ impl FilesystemMT for FS {
         let old = relative_path(path);
         let new = new_parent.join(new_name);
         let new = relative_path(&new);
+        if let Some(info) = self.metadata.get(old) {
+            let _ = self.metadata.set(new, info);
+        };
         result_empty(unistd::linkat(
             Some(self.root),
             old,
