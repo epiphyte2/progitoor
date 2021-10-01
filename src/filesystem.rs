@@ -322,7 +322,7 @@ impl FilesystemMT for FS {
 
     fn utimens(
         &self,
-        _req: RequestInfo,
+        req: RequestInfo,
         path: &Path,
         fh: Option<u64>,
         atime: Option<time::Timespec>,
@@ -336,7 +336,7 @@ impl FilesystemMT for FS {
                 || init_info(self.stat(path, fh, fcntl::AtFlags::empty())),
             )?;
         };
-        result_empty(match fh {
+        let result = result_empty(match fh {
             Some(fh) => stat::futimens(fh as RawFd, &utime(atime), &utime(mtime)),
             None => stat::utimensat(
                 Some(self.root),
@@ -345,7 +345,14 @@ impl FilesystemMT for FS {
                 &utime(mtime),
                 stat::UtimensatFlags::FollowSymlink,
             ),
-        })
+        });
+        match result {
+            Err(libc::ENOENT) => match self.getattr(req, path, fh) {
+                Ok(attr) if attr.1.kind == FileType::Symlink => Ok(()),
+                _ => result,
+            },
+            _ => result,
+        }
     }
 
     fn readlink(&self, _req: RequestInfo, path: &Path) -> ResultData {
