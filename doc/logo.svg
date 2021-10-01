@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   width="137.09001mm"
+   height="126.40824mm"
+   viewBox="0 0 137.09001 126.40824"
+   version="1.1"
+   id="svg8"
+   inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)"
+   sodipodi:docname="logo.svg"
+   inkscape:export-filename="/home/simeon/Code/epiphyte2/progitoor/doc/logo.png"
+   inkscape:export-xdpi="119.97"
+   inkscape:export-ydpi="119.97">
+  <defs
+     id="defs2" />
+  <sodipodi:namedview
+     id="base"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageopacity="0.0"
+     inkscape:pageshadow="2"
+     inkscape:zoom="1.979899"
+     inkscape:cx="214.99239"
+     inkscape:cy="250.94997"
+     inkscape:document-units="mm"
+     inkscape:current-layer="layer1"
+     showgrid="false"
+     inkscape:window-width="2560"
+     inkscape:window-height="1390"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     fit-margin-top="0"
+     fit-margin-left="0"
+     fit-margin-right="0"
+     fit-margin-bottom="0" />
+  <metadata
+     id="metadata5">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-21.194909,-71.115734)">
+    <path
+       style="fill:none;stroke:#b3b3b3;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 35.340774,170.56696 152.58741,122.06528 Z"
+       id="path853-6"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="ccc" />
+    <path
+       style="fill:#e5ffd5;stroke:#b3b3b3;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 35.340774,170.56696 104.10227,71.4238 Z"
+       id="path853"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="ccc" />
+    <flowRoot
+       xml:space="preserve"
+       id="flowRoot841"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:40.00014114px;line-height:1.25;font-family:monospace;-inkscape-font-specification:'monospace, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none"
+       transform="matrix(0.11043183,0,0,0.12604509,82.690039,-14.571061)"><flowRegion
+         id="flowRegion843"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:40.00014114px;font-family:monospace;-inkscape-font-specification:'monospace, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;writing-mode:lr-tb;text-anchor:start"><rect
+           id="rect845"
+           width="582.85712"
+           height="617.85712"
+           x="182.85715"
+           y="650.37683"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:40.00014114px;font-family:monospace;-inkscape-font-specification:'monospace, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;writing-mode:lr-tb;text-anchor:start" /></flowRegion><flowPara
+         id="flowPara1033">.</flowPara><flowPara
+         id="flowPara1039">├── Cargo.lock</flowPara><flowPara
+         id="flowPara1041">├── Cargo.toml</flowPara><flowPara
+         id="flowPara1043">├── README.md</flowPara><flowPara
+         id="flowPara1045">└── src    </flowPara><flowPara
+         id="flowPara1047">				├── filesystem.rs</flowPara><flowPara
+         id="flowPara1049">				├── lib.rs</flowPara><flowPara
+         id="flowPara1051">				├── main.rs    </flowPara><flowPara
+         id="flowPara1053">				└── metadata.rs</flowPara></flowRoot>    <g
+       id="g889"
+       transform="translate(-2.4388345,3.6081386)">
+      <rect
+         y="114.14696"
+         x="74.533173"
+         height="25.036512"
+         width="29.992645"
+         id="rect851"
+         style="fill:none;fill-opacity:1;stroke:#b3b3b3;stroke-width:0.37339696;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1" />
+      <flowRoot
+         transform="matrix(0.05590097,0,0,0.05590097,65.159001,77.350992)"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:40.00014114px;line-height:1.25;font-family:monospace;-inkscape-font-specification:'monospace, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none"
+         id="flowRoot841-3"
+         xml:space="preserve"><flowRegion
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:40.00014114px;font-family:monospace;-inkscape-font-specification:'monospace, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;writing-mode:lr-tb;text-anchor:start"
+           id="flowRegion843-5"><rect
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:40.00014114px;font-family:monospace;-inkscape-font-specification:'monospace, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;writing-mode:lr-tb;text-anchor:start"
+             y="650.37683"
+             x="182.85715"
+             height="617.85712"
+             width="582.85712"
+             id="rect845-6" /></flowRegion><flowPara
+           id="flowPara1033-5">.</flowPara><flowPara
+           id="flowPara1039-0">├── Cargo.lock</flowPara><flowPara
+           id="flowPara1041-7">├── Cargo.toml</flowPara><flowPara
+           id="flowPara1043-6">├── README.md</flowPara><flowPara
+           id="flowPara1045-3">└── src    </flowPara><flowPara
+           id="flowPara1047-7">				├── filesystem.rs</flowPara><flowPara
+           id="flowPara1049-6">				├── lib.rs</flowPara><flowPara
+           id="flowPara1051-1">				├── main.rs    </flowPara><flowPara
+           id="flowPara1053-5">				└── metadata.rs</flowPara></flowRoot>    </g>
+    <g
+       transform="translate(10.626101,111.64801)"
+       id="g5763">
+      <flowRoot
+         transform="matrix(0.57292886,0,0,0.57292886,-81.884021,-325.19919)"
+         style="font-style:normal;font-weight:normal;font-size:40px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+         id="flowRoot841-4-3"
+         xml:space="preserve"><flowRegion
+           id="flowRegion843-9-4"><rect
+             y="650.37683"
+             x="182.85715"
+             height="57.857143"
+             width="306.42856"
+             id="rect845-0-9" /></flowRegion><flowPara
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Ubuntu Mono';-inkscape-font-specification:'Ubuntu Mono'"
+           id="flowPara847-2-2">pro</flowPara></flowRoot>      <flowRoot
+         transform="matrix(0.57292886,0,0,0.57292886,-24.573387,-325.2026)"
+         style="font-style:normal;font-weight:normal;font-size:40px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+         id="flowRoot841-4-4-7"
+         xml:space="preserve"><flowRegion
+           style="fill:#000000"
+           id="flowRegion843-9-2-4"><rect
+             style="fill:#000000"
+             y="650.37683"
+             x="182.85715"
+             height="57.857143"
+             width="306.42856"
+             id="rect845-0-7-25" /></flowRegion><flowPara
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Ubuntu Mono';-inkscape-font-specification:'Ubuntu Mono';fill:#000000"
+           id="flowPara847-2-4-2"> oor</flowPara></flowRoot>      <flowRoot
+         transform="matrix(0.50679901,0,-0.50679901,0.32277896,327.11315,-138.82051)"
+         style="font-style:normal;font-weight:normal;font-size:40px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#b3b3b3;fill-opacity:1;stroke:none"
+         id="flowRoot841-4-4-0-4"
+         xml:space="preserve"><flowRegion
+           style="fill:#b3b3b3"
+           id="flowRegion843-9-2-3-4"><rect
+             style="fill:#b3b3b3"
+             y="650.37683"
+             x="182.85715"
+             height="57.857143"
+             width="306.42856"
+             id="rect845-0-7-2-3" /></flowRegion><flowPara
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Ubuntu Mono';-inkscape-font-specification:'Ubuntu Mono';fill:#b3b3b3"
+           id="flowPara847-2-4-8-8">root</flowPara></flowRoot>      <flowRoot
+         transform="matrix(0.57292886,0,0,0.57292886,-47.520561,-325.20718)"
+         style="font-style:normal;font-weight:normal;font-size:40px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#800000;fill-opacity:1;stroke:none"
+         id="flowRoot841-4-0-6"
+         xml:space="preserve"><flowRegion
+           style="fill:#800000"
+           id="flowRegion843-9-3-0"><rect
+             style="fill:#800000"
+             y="650.37683"
+             x="182.85715"
+             height="57.857143"
+             width="306.42856"
+             id="rect845-0-70-8" /></flowRegion><flowPara
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Ubuntu Mono';-inkscape-font-specification:'Ubuntu Mono';fill:#800000"
+           id="flowPara847-2-0-9">git</flowPara></flowRoot>      <flowRoot
+         transform="matrix(0.50679901,0,0.50679901,-0.32277896,-422.45145,299.19562)"
+         style="font-style:normal;font-weight:normal;font-size:40px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#b3b3b3;fill-opacity:1;stroke:none"
+         id="flowRoot841-4-4-0-4-2"
+         xml:space="preserve"><flowRegion
+           style="fill:#b3b3b3"
+           id="flowRegion843-9-2-3-4-2"><rect
+             style="fill:#b3b3b3"
+             y="650.37683"
+             x="182.85715"
+             height="57.857143"
+             width="306.42856"
+             id="rect845-0-7-2-3-3" /></flowRegion><flowPara
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Ubuntu Mono';-inkscape-font-specification:'Ubuntu Mono';fill:#b3b3b3"
+           id="flowPara847-2-4-8-8-1">p ogit</flowPara></flowRoot>      <rect
+         transform="matrix(1,0,-0.81515203,0.57924707,0,0)"
+         y="131.79222"
+         x="138.75197"
+         height="11.773423"
+         width="7.1448674"
+         id="rect5740"
+         style="fill:none;fill-opacity:0.327549;stroke:#000000;stroke-width:0.31451529;stroke-miterlimit:4;stroke-dasharray:0.31451537, 0.31451537;stroke-dashoffset:0;stroke-opacity:0.30476194" />
+    </g>
+  </g>
+</svg>

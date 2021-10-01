@@ -1,5 +1,7 @@
 # progitoor
 
+![logo.png](./doc/logo.png)
+
 ## Introduction
 
 `progitoor` is an overlay filesystem that stores ownership and other file metadata in a text database and presents
