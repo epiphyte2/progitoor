@@ -129,6 +129,15 @@ fn main() -> Result<()> {
         background().context("failed to daemonize")?;
     }
 
+    // Add a panic handler that causes the process to exit, otherwise
+    // the periodic flusher thread may panic and we'll just continue running.
+    let orig_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        log::error!("progitoor thread panic: {}", panic_info);
+        orig_hook(panic_info);
+        std::process::exit(1);
+    }));
+
     match fuse_mt::mount(
         fuse_mt::FuseMT::new(fuse, 1),
         &absolute_mount_path,
