@@ -172,6 +172,21 @@ fn result_statfs(result: Result<statfs::Statfs, nix::Error>) -> ResultStatfs {
 }
 
 impl FS {
+    pub fn new(mount_fd: RawFd) -> Self {
+        let fuse = FS {
+            root: mount_fd,
+            owner: MountOwner {
+                uid: unistd::getuid(),
+                gid: unistd::getgid(),
+            },
+            metadata: crate::metadata::Store::new(mount_fd).unwrap(),
+        };
+
+        fuse.create_parents();
+
+        fuse
+    }
+
     fn mapping(&self, req: &RequestInfo, path: &Path) -> FileInfo {
         let mut info = self.metadata.get(path).unwrap_or(FileInfo {
             uid: Some(unistd::Uid::from_raw(0)),
@@ -217,6 +232,17 @@ impl FS {
             Ok(()) => Ok(()),
             Err(_) => Err(libc::ENODEV),
         }
+    }
+
+    fn create_parents(&self) {
+        self.metadata
+            .walk(|k, v| {
+                println!("{:?} -> {:?}", k, v)
+                // for c in k.components() {
+                //
+                // }
+            })
+            .unwrap();
     }
 }
 

@@ -264,6 +264,18 @@ impl Store {
         })
     }
 
+    /// Walks the metadata store calling the visitor for each entry
+    pub fn walk<F>(&self, visitor: F) -> Result<(), MetadataError>
+    where
+        F: Fn(&Path, &FileInfo) -> (),
+    {
+        let map = self.map.read().unwrap();
+        for (k, v) in map.iter() {
+            visitor(k, v);
+        }
+        Ok(())
+    }
+
     /// Persist file metadata
     pub fn set(&self, name: &Path, info: FileInfo) -> Result<(), MetadataError> {
         self.map

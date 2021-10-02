@@ -17,10 +17,9 @@ use clap::{
 use daemonize::{Daemonize, DaemonizeError};
 use nix::fcntl;
 use nix::sys::stat;
-use nix::unistd;
 use log::{error, info};
 
-use progitoor::filesystem::{MountOwner, FS};
+use progitoor::filesystem::FS;
 
 fn background() -> std::result::Result<(), DaemonizeError> {
     let daemonize = Daemonize::new().exit_action(|| println!("Foreground process exiting."));
@@ -107,14 +106,7 @@ fn main() -> Result<()> {
 
     info!("Absolute mount/root dir: {:?}", absolute_mount_path);
 
-    let fuse = FS {
-        root: mount_fd,
-        owner: MountOwner {
-            uid: unistd::getuid(),
-            gid: unistd::getgid(),
-        },
-        metadata: progitoor::metadata::Store::new(mount_fd).unwrap(),
-    };
+    let fuse = FS::new(mount_fd);
 
     // Add a panic handler that causes the process to exit, otherwise
     // the periodic flusher thread may panic and we'll just continue running.
