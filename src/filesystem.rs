@@ -187,22 +187,11 @@ impl FS {
         info
     }
 
-    fn stat(
-        &self,
-        rel_path: &Path,
-        fh: Option<u64>,
-        flags: fcntl::AtFlags,
-    ) -> nix::Result<stat::FileStat> {
-        let result = match fh {
+    fn stat(&self, path: &Path, fh: Option<u64>) -> nix::Result<stat::FileStat> {
+        match fh {
             Some(fd) => stat::fstat(fd as RawFd),
-            None => stat::fstatat(self.root, rel_path, flags),
-        };
-        if matches!(result, Err(nix::Error::ENOENT))
-            && !flags.contains(fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)
-        {
-            return self.stat(rel_path, fh, flags | fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
-        };
-        result
+            None => stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
+        }
     }
 
     fn update<F, G>(&self, path: &Path, updater: F, initializer: G) -> ResultEmpty
@@ -211,6 +200,13 @@ impl FS {
         G: FnOnce() -> Option<FileInfo>,
     {
         match self.metadata.update(path, updater, initializer) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(libc::ENODEV),
+        }
+    }
+
+    fn set(&self, path: &Path, info: FileInfo) -> ResultEmpty {
+        match self.metadata.set(path, info) {
             Ok(()) => Ok(()),
             Err(_) => Err(libc::ENODEV),
         }
@@ -227,10 +223,7 @@ impl FS {
 impl FilesystemMT for FS {
     fn getattr(&self, req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
         let path = relative_path(path);
-        result_entry(
-            self.mapping(&req, path),
-            self.stat(path, fh, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
-        )
+        result_entry(self.mapping(&req, path), self.stat(path, fh))
     }
 
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
@@ -241,9 +234,7 @@ impl FilesystemMT for FS {
                 *m |= mode & !libc::S_IFMT;
             };
         };
-        self.update(path, update, || {
-            init_info(self.stat(path, fh, fcntl::AtFlags::empty()))
-        })?;
+        self.update(path, update, || init_info(self.stat(path, fh)))?;
         let mode = stat::Mode::from_bits_truncate(underlay_mode(mode));
         result_empty(match fh {
             Some(fd) => stat::fchmod(fd as RawFd, mode),
@@ -251,7 +242,7 @@ impl FilesystemMT for FS {
                 Some(self.root),
                 path,
                 mode,
-                stat::FchmodatFlags::FollowSymlink,
+                stat::FchmodatFlags::NoFollowSymlink,
             ),
         })
     }
@@ -284,9 +275,7 @@ impl FilesystemMT for FS {
                     info.gid = gid;
                 };
             };
-            return self.update(path, update, || {
-                init_info(self.stat(path, fh, fcntl::AtFlags::empty()))
-            });
+            return self.update(path, update, || init_info(self.stat(path, fh)));
         };
 
         // not sure pass through is useful, but is consistent with getattr() for owner
@@ -297,7 +286,7 @@ impl FilesystemMT for FS {
                 path,
                 uid,
                 gid,
-                unistd::FchownatFlags::FollowSymlink,
+                unistd::FchownatFlags::NoFollowSymlink,
             ),
         })
     }
@@ -323,7 +312,7 @@ impl FilesystemMT for FS {
 
     fn utimens(
         &self,
-        req: RequestInfo,
+        _req: RequestInfo,
         path: &Path,
         fh: Option<u64>,
         atime: Option<time::Timespec>,
@@ -334,26 +323,19 @@ impl FilesystemMT for FS {
             self.update(
                 path,
                 |info| info.time = atime,
-                || init_info(self.stat(path, fh, fcntl::AtFlags::empty())),
+                || init_info(self.stat(path, fh)),
             )?;
         };
-        let result = result_empty(match fh {
+        result_empty(match fh {
             Some(fh) => stat::futimens(fh as RawFd, &utime(atime), &utime(mtime)),
             None => stat::utimensat(
                 Some(self.root),
                 path,
                 &utime(atime),
                 &utime(mtime),
-                stat::UtimensatFlags::FollowSymlink,
+                stat::UtimensatFlags::NoFollowSymlink,
             ),
-        });
-        match result {
-            Err(libc::ENOENT) => match self.getattr(req, path, fh) {
-                Ok(attr) if attr.1.kind == FileType::Symlink => Ok(()),
-                _ => result,
-            },
-            _ => result,
-        }
+        })
     }
 
     fn readlink(&self, _req: RequestInfo, path: &Path) -> ResultData {
@@ -381,7 +363,7 @@ impl FilesystemMT for FS {
                 return Err(io::Error::last_os_error().raw_os_error().unwrap());
             };
         }
-        let stat = self.stat(path, None, fcntl::AtFlags::empty());
+        let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
         self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
         result_entry(self.mapping(&req, path), stat)
     }
@@ -395,7 +377,7 @@ impl FilesystemMT for FS {
             path,
             stat::Mode::from_bits_truncate(underlay_mode(mode)),
         ))?;
-        let stat = self.stat(path, None, fcntl::AtFlags::empty());
+        let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
         self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
         result_entry(self.mapping(&req, path), stat)
     }
@@ -426,10 +408,11 @@ impl FilesystemMT for FS {
         let path = parent.join(name);
         let path = relative_path(&path);
         result_empty(unistd::symlinkat(target, Some(self.root), path))?;
-        result_entry(
-            self.mapping(&req, path),
-            stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
-        )
+        let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
+        if stat.is_ok() {
+            self.set(path, init_info(stat).unwrap())?;
+        };
+        result_entry(self.mapping(&req, path), stat)
     }
 
     fn rename(
@@ -471,10 +454,11 @@ impl FilesystemMT for FS {
             new,
             unistd::LinkatFlags::NoSymlinkFollow,
         ))?;
-        result_entry(
-            self.mapping(&req, new),
-            stat::fstatat(self.root, new, fcntl::AtFlags::empty()),
-        )
+        let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
+        if stat.is_ok() {
+            self.set(path, init_info(stat).unwrap())?;
+        };
+        result_entry(self.mapping(&req, new), stat)
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
@@ -645,7 +629,7 @@ impl FilesystemMT for FS {
             Ok(fd) => fd as RawFd,
             Err(e) => return Err(e as libc::c_int),
         };
-        let stat = self.stat(path, Some(fd as u64), fcntl::AtFlags::empty());
+        let stat = self.stat(path, Some(fd as u64));
         let update = |info: &mut FileInfo| {
             info.mode = Some(mode);
             info.uid = Some(unistd::Uid::from_raw(req.uid));
