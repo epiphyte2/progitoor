@@ -229,7 +229,7 @@ impl Store {
     pub fn update<F, G>(&self, name: &Path, updater: F, initializer: G) -> Result<(), MetadataError>
     where
         F: FnOnce(&mut FileInfo) -> (),
-        G: FnOnce() -> FileInfo,
+        G: FnOnce() -> Option<FileInfo>,
     {
         let mut map = match self.map.write() {
             Ok(map) => map,
@@ -242,7 +242,11 @@ impl Store {
                 info.clone()
             }
             Entry::Vacant(e) => {
-                let mut info = initializer();
+                let info = initializer();
+                if info.is_none() {
+                    return Ok(());
+                };
+                let mut info = info.unwrap();
                 updater(&mut info);
                 e.insert(info);
                 info

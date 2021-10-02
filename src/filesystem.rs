@@ -112,9 +112,9 @@ fn result_entry(mapping: FileInfo, result: Result<stat::FileStat, nix::Error>) -
     }
 }
 
-fn init_info(stat: Result<stat::FileStat, nix::Error>) -> FileInfo {
+fn init_info(stat: Result<stat::FileStat, nix::Error>) -> Option<FileInfo> {
     match stat {
-        Ok(stat) => FileInfo {
+        Ok(stat) => Some(FileInfo {
             time: Some(time::Timespec::new(
                 stat.st_mtime,
                 stat.st_mtime_nsec as i32,
@@ -122,13 +122,8 @@ fn init_info(stat: Result<stat::FileStat, nix::Error>) -> FileInfo {
             mode: Some(stat.st_mode as libc::mode_t),
             uid: Some(unistd::Uid::from_raw(stat.st_uid)),
             gid: Some(unistd::Gid::from_raw(stat.st_gid)),
-        },
-        Err(_) => FileInfo {
-            time: Some(time::Timespec::new(0, 0)),
-            mode: Some(libc::S_IFREG),
-            uid: Some(unistd::Uid::from_raw(0)),
-            gid: Some(unistd::Gid::from_raw(0)),
-        },
+        }),
+        Err(_) => None,
     }
 }
 
@@ -198,16 +193,22 @@ impl FS {
         fh: Option<u64>,
         flags: fcntl::AtFlags,
     ) -> nix::Result<stat::FileStat> {
-        match fh {
+        let result = match fh {
             Some(fd) => stat::fstat(fd as RawFd),
             None => stat::fstatat(self.root, rel_path, flags),
-        }
+        };
+        if matches!(result, Err(nix::Error::ENOENT))
+            && !flags.contains(fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)
+        {
+            return self.stat(rel_path, fh, flags | fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
+        };
+        result
     }
 
     fn update<F, G>(&self, path: &Path, updater: F, initializer: G) -> ResultEmpty
     where
         F: FnOnce(&mut FileInfo) -> (),
-        G: FnOnce() -> FileInfo,
+        G: FnOnce() -> Option<FileInfo>,
     {
         match self.metadata.update(path, updater, initializer) {
             Ok(()) => Ok(()),
