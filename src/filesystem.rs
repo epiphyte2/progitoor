@@ -58,8 +58,8 @@ fn utime(time: Option<time::Timespec>) -> nix::sys::time::TimeSpec {
     })
 }
 
-fn restrict_mode(mode: u32) -> libc::mode_t {
-    mode as libc::mode_t & !(libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX)
+fn underlay_mode(mode: u32) -> libc::mode_t {
+    mode as libc::mode_t & !(libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX) | libc::S_IWUSR
 }
 
 fn result_entry(mapping: FileInfo, result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
@@ -244,7 +244,7 @@ impl FilesystemMT for FS {
         self.update(path, update, || {
             init_info(self.stat(path, fh, fcntl::AtFlags::empty()))
         })?;
-        let mode = stat::Mode::from_bits_truncate(restrict_mode(mode));
+        let mode = stat::Mode::from_bits_truncate(underlay_mode(mode));
         result_empty(match fh {
             Some(fd) => stat::fchmod(fd as RawFd, mode),
             None => stat::fchmodat(
@@ -374,7 +374,7 @@ impl FilesystemMT for FS {
             if libc::mknodat(
                 self.root as libc::c_int,
                 CString::from_vec_unchecked(path.as_os_str().as_bytes().to_vec()).as_ptr(),
-                restrict_mode(mode),
+                underlay_mode(mode),
                 rdev as libc::dev_t,
             ) == -1
             {
@@ -393,7 +393,7 @@ impl FilesystemMT for FS {
         result_empty(stat::mkdirat(
             self.root,
             path,
-            stat::Mode::from_bits_truncate(restrict_mode(mode)),
+            stat::Mode::from_bits_truncate(underlay_mode(mode)),
         ))?;
         let stat = self.stat(path, None, fcntl::AtFlags::empty());
         self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
@@ -640,7 +640,7 @@ impl FilesystemMT for FS {
             self.root,
             path,
             flags,
-            stat::Mode::from_bits_truncate(restrict_mode(mode)),
+            stat::Mode::from_bits_truncate(underlay_mode(mode)),
         ) {
             Ok(fd) => fd as RawFd,
             Err(e) => return Err(e as libc::c_int),
