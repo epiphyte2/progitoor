@@ -8,7 +8,6 @@ extern crate time;
 
 use std::ffi::OsString;
 use std::fs;
-use std::fs::File;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
@@ -24,19 +23,7 @@ use log::{error, info};
 use progitoor::filesystem::{MountOwner, FS};
 
 fn background() -> std::result::Result<(), DaemonizeError> {
-    // FIXME: if we don't have this, we don't see any errors if the process dies after forking
-    //        so this needs to be replaced with proper logging, but is useful in the meantime.
-    let stdout = File::create("/tmp/progitoor.out").unwrap();
-    let stderr = File::create("/tmp/progitoor.err").unwrap();
-
-    let daemonize = Daemonize::new()
-        .pid_file("/tmp/progitoor.pid") // TODO: how can we delete this on exit?
-        .stdout(stdout)
-        .stderr(stderr)
-        .chown_pid_file(true);
-
-    // This runs in the parent process, so isn't useful for unmount
-    //.exit_action(|| println!("Executed before master process exits"));
+    let daemonize = Daemonize::new().exit_action(|| println!("Foreground process exiting."));
 
     daemonize.start()
 }
@@ -75,14 +62,6 @@ fn main() -> Result<()> {
         .arg(Arg::with_name("DIR").index(1).required(true))
         .get_matches();
 
-    let mut base_log_config = fern::Dispatch::new();
-    base_log_config = match value_t!(arg, "LOGLEVEL", LogLevel).context("Could not get loglevel")? {
-        LogLevel::Debug => base_log_config.level(log::LevelFilter::Debug),
-        LogLevel::Info => base_log_config.level(log::LevelFilter::Info),
-        LogLevel::Warning => base_log_config.level(log::LevelFilter::Warn),
-        LogLevel::Error => base_log_config.level(log::LevelFilter::Error),
-    };
-
     let dir = arg
         .value_of("DIR")
         .context("Could not get base/mount point directory")?;
@@ -97,8 +76,6 @@ fn main() -> Result<()> {
     let absolute_mount_path = fs::canonicalize(mount_path)
         .context(format!("Failed to canonicalize mount path of {}", dir))?;
 
-    info!("Absolute mount/root dir: {:?}", absolute_mount_path);
-
     let mount_fd = fcntl::open(
         &absolute_mount_path,
         fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
@@ -106,13 +83,12 @@ fn main() -> Result<()> {
     )
     .context(format!("Failed to open directory {}", dir))?;
 
-    let fuse = FS {
-        root: mount_fd,
-        owner: MountOwner {
-            uid: unistd::getuid(),
-            gid: unistd::getgid(),
-        },
-        metadata: progitoor::metadata::Store::new(mount_fd).unwrap(),
+    let mut base_log_config = fern::Dispatch::new();
+    base_log_config = match value_t!(arg, "LOGLEVEL", LogLevel).context("Could not get loglevel")? {
+        LogLevel::Debug => base_log_config.level(log::LevelFilter::Debug),
+        LogLevel::Info => base_log_config.level(log::LevelFilter::Info),
+        LogLevel::Warning => base_log_config.level(log::LevelFilter::Warn),
+        LogLevel::Error => base_log_config.level(log::LevelFilter::Error),
     };
 
     if arg.is_present("FOREGROUND") {
@@ -128,6 +104,17 @@ fn main() -> Result<()> {
 
         background().context("failed to daemonize")?;
     }
+
+    info!("Absolute mount/root dir: {:?}", absolute_mount_path);
+
+    let fuse = FS {
+        root: mount_fd,
+        owner: MountOwner {
+            uid: unistd::getuid(),
+            gid: unistd::getgid(),
+        },
+        metadata: progitoor::metadata::Store::new(mount_fd).unwrap(),
+    };
 
     // Add a panic handler that causes the process to exit, otherwise
     // the periodic flusher thread may panic and we'll just continue running.

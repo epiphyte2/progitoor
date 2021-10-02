@@ -133,8 +133,10 @@ pub struct Store {
 impl Store {
     /// Construct a new Store instance
     pub fn new(root: RawFd) -> Result<Self, MetadataError> {
+        log::debug!("Initialising metadata store");
         match Self::new_without_flusher_thread(root) {
             Ok(store) => {
+                log::debug!("Metadata store created, starting flusher thread.");
                 store.start_flusher_thread();
                 Ok(store)
             }
@@ -167,8 +169,12 @@ impl Store {
         let thread_root = self.root.clone();
         let thread_flag = self.flusher_thread_run.clone();
 
+        log::info!("Periodic flusher thread starting");
+
         std::thread::spawn(move || {
+            log::info!("Periodic flusher thread running");
             while thread_flag.load(Ordering::SeqCst) {
+                //log::debug!("Metadata flush.");
                 // TODO: make sleep configurable
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 Store::flush(&thread_map, thread_root)
