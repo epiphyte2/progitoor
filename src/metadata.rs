@@ -8,8 +8,8 @@ use nix::fcntl;
 use nix::sys::stat;
 use nix::unistd;
 use std::borrow::Borrow;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::prelude::*;
@@ -120,8 +120,8 @@ impl TryFrom<&str> for FileEntry {
     }
 }
 
-/// MtMap is a type alias for the heavily wrapped HashMap
-type MtMap = Arc<RwLock<HashMap<PathBuf, FileInfo>>>;
+/// MtMap is a type alias for the heavily wrapped BTreeMap
+type MtMap = Arc<RwLock<BTreeMap<PathBuf, FileInfo>>>;
 
 /// Store is a file metadata store to support progitoor mapping
 pub struct Store {
@@ -147,7 +147,7 @@ impl Store {
     /// Construct a Store instance that doesn't start a periodic flusher thread
     pub fn new_without_flusher_thread(root: RawFd) -> Result<Self, MetadataError> {
         let mut store = Self {
-            map: Arc::new(RwLock::new(HashMap::new())),
+            map: Arc::new(RwLock::new(BTreeMap::new())),
             root: root,
             flusher_thread_run: Arc::new(AtomicBool::new(true)),
         };
