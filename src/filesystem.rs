@@ -220,13 +220,6 @@ impl FS {
         }
     }
 
-    fn set(&self, path: &Path, info: FileInfo) -> ResultEmpty {
-        match self.metadata.set(path, info) {
-            Ok(()) => Ok(()),
-            Err(_) => Err(libc::ENODEV),
-        }
-    }
-
     fn remove(&self, path: &Path) -> ResultEmpty {
         match self.metadata.remove(path) {
             Ok(()) => Ok(()),
@@ -404,7 +397,12 @@ impl FilesystemMT for FS {
             stat::Mode::from_bits_truncate(underlay_mode(mode)),
         ))?;
         let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
-        self.update(path, |info| info.mode = Some(mode), || init_info(stat))?;
+        let update = |info: &mut FileInfo| {
+            info.mode = Some(mode);
+            info.uid = Some(unistd::Uid::from_raw(req.uid));
+            info.gid = Some(unistd::Gid::from_raw(req.gid));
+        };
+        self.update(path, update, || init_info(stat))?;
         result_entry(self.mapping(&req, path), stat)
     }
 
@@ -435,9 +433,11 @@ impl FilesystemMT for FS {
         let path = relative_path(&path);
         result_empty(unistd::symlinkat(target, Some(self.root), path))?;
         let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
-        if stat.is_ok() {
-            self.set(path, init_info(stat).unwrap())?;
+        let update = |info: &mut FileInfo| {
+            info.uid = Some(unistd::Uid::from_raw(req.uid));
+            info.gid = Some(unistd::Gid::from_raw(req.gid));
         };
+        self.update(path, update, || init_info(stat))?;
         result_entry(self.mapping(&req, path), stat)
     }
 
@@ -480,11 +480,10 @@ impl FilesystemMT for FS {
             new,
             unistd::LinkatFlags::NoSymlinkFollow,
         ))?;
-        let stat = stat::fstatat(self.root, path, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW);
-        if stat.is_ok() {
-            self.set(path, init_info(stat).unwrap())?;
-        };
-        result_entry(self.mapping(&req, new), stat)
+        result_entry(
+            self.mapping(&req, new),
+            stat::fstatat(self.root, new, fcntl::AtFlags::AT_SYMLINK_NOFOLLOW),
+        )
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
