@@ -176,7 +176,7 @@ impl Store {
             while thread_flag.load(Ordering::SeqCst) {
                 //log::debug!("Metadata flush.");
                 // TODO: make sleep configurable
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                std::thread::sleep(std::time::Duration::from_secs(30));
                 Store::flush(&thread_map, thread_root)
                     .expect("metadata store periodic flush thread failed");
             }
