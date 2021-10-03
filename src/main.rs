@@ -6,7 +6,7 @@ extern crate libc;
 extern crate nix;
 extern crate time;
 
-use std::ffi::OsString;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -134,8 +134,30 @@ fn main() -> Result<()> {
         background(ready_rx).context("failed to daemonize")?;
     }
 
+    let default_fuse_options = vec!["nonempty", "allow_root", "auto_unmount", "suid", "exec"];
+
+    let mut fuse_options: Vec<_> = default_fuse_options
+        .iter()
+        .flat_map(|x| [OsStr::new("-o"), OsStr::new(x)])
+        .collect();
+
+    if arg.is_present("MOUNT_OPT") {
+        let user_options = arg
+            .value_of("MOUNT_OPT")
+            .context("Problem getting mount options")?;
+        if user_options != "" {
+            fuse_options.extend(
+                user_options
+                    .split(",")
+                    .filter(|x| !default_fuse_options.contains(x))
+                    .flat_map(|x| [OsStr::new("-o"), OsStr::new(x)]),
+            );
+        }
+    }
+
     info!("Source dir: {:?}", source_dir);
     info!("Mount point: {:?}", target_dir);
+    info!("Using fuse mount options: {:?}", fuse_options);
 
     let fuse = FS::new(mount_fd);
 
@@ -151,23 +173,8 @@ fn main() -> Result<()> {
     info!("Ready to mount...");
     ready_tx.write(&[0]).context("Signalling fork failed")?;
 
-    match fuse_mt::mount(
-        fuse_mt::FuseMT::new(fuse, 16),
-        &target_dir,
-        &[
-            &OsString::from("-o"),
-            &OsString::from("nonempty"),
-            &OsString::from("-o"),
-            &OsString::from("allow_root"),
-            &OsString::from("-o"),
-            &OsString::from("auto_unmount"),
-            &OsString::from("-o"),
-            &OsString::from("suid"),
-            &OsString::from("-o"),
-            &OsString::from("exec"),
-        ],
-    )
-    .context("Mount failed")
+    match fuse_mt::mount(fuse_mt::FuseMT::new(fuse, 16), &target_dir, &fuse_options)
+        .context("Mount failed")
     {
         Ok(..) => {
             info!("progitoor exiting normally");
