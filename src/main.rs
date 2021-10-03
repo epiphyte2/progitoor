@@ -8,6 +8,7 @@ extern crate time;
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
@@ -15,14 +16,24 @@ use clap::{
     arg_enum, crate_authors, crate_description, crate_name, crate_version, value_t, App, Arg,
 };
 use daemonize::{Daemonize, DaemonizeError};
+use interprocess::unnamed_pipe::{pipe, UnnamedPipeReader};
 use nix::fcntl;
 use nix::sys::stat;
 use log::{error, info};
 
 use progitoor::filesystem::FS;
 
-fn background() -> std::result::Result<(), DaemonizeError> {
-    let daemonize = Daemonize::new().exit_action(|| println!("Foreground process exiting."));
+fn background(mut ready: UnnamedPipeReader) -> std::result::Result<(), DaemonizeError> {
+    let daemonize = Daemonize::new().exit_action(move || {
+        println!("Foreground process waiting for mount...");
+        let mut buffer = [0; 0];
+        ready
+            .read(&mut buffer[..])
+            .expect("Receiving on ready channel failed");
+        println!("Foreground process waiting for 2s...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("Foreground process exiting.");
+    });
 
     daemonize.start()
 }
@@ -107,6 +118,8 @@ fn main() -> Result<()> {
         LogLevel::Error => base_log_config.level(log::LevelFilter::Error),
     };
 
+    let (mut ready_tx, ready_rx) = pipe().expect("Failed to create unnamed pipe for IPC");
+
     if arg.is_present("FOREGROUND") {
         base_log_config
             .chain(std::io::stdout())
@@ -118,7 +131,7 @@ fn main() -> Result<()> {
             .apply()
             .context("failed to set up logger")?;
 
-        background().context("failed to daemonize")?;
+        background(ready_rx).context("failed to daemonize")?;
     }
 
     info!("Source dir: {:?}", source_dir);
@@ -134,6 +147,9 @@ fn main() -> Result<()> {
         orig_hook(panic_info);
         std::process::exit(1);
     }));
+
+    info!("Ready to mount...");
+    ready_tx.write(&[0]).context("Signalling fork failed")?;
 
     match fuse_mt::mount(
         fuse_mt::FuseMT::new(fuse, 16),
