@@ -182,7 +182,7 @@ impl FS {
             metadata: crate::metadata::Store::new(mount_fd).unwrap(),
         };
 
-        fuse.create_parents();
+        fuse.create_missing_dirs();
 
         fuse
     }
@@ -227,13 +227,22 @@ impl FS {
         }
     }
 
-    fn create_parents(&self) {
+    fn create_missing_dirs(&self) {
         self.metadata
             .walk(|k, v| {
-                println!("{:?} -> {:?}", k, v)
-                // for c in k.components() {
-                //
-                // }
+                if let Some(mode) = v.mode {
+                    if (mode & libc::S_IFMT) == libc::S_IFDIR {
+                        if let Err(e) = stat::mkdirat(
+                            self.root,
+                            k,
+                            stat::Mode::from_bits_truncate(underlay_mode(mode)),
+                        ) {
+                            if e != nix::Error::EEXIST {
+                                log::error!("Could not create missing directory: {:?}", e)
+                            }
+                        }
+                    }
+                }
             })
             .unwrap();
     }
