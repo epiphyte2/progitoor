@@ -58,29 +58,46 @@ fn main() -> Result<()> {
                 .takes_value(true)
                 .default_value("Info"),
         )
-        .arg(Arg::with_name("DIR").index(1).required(true))
+        .arg(
+            Arg::with_name("MOUNT_OPT")
+                .short("o")
+                .number_of_values(1)
+                .multiple(true)
+                .help("Specifies the mount options")
+                .required(false)
+                .takes_value(true),
+        )
+        .arg(Arg::with_name("SOURCE").index(1).required(true))
+        .arg(Arg::with_name("TARGET").index(2).required(true))
         .get_matches();
 
-    let dir = arg
-        .value_of("DIR")
-        .context("Could not get base/mount point directory")?;
+    let source_dir = arg.value_of("SOURCE").context("No source directory")?;
 
-    let mount_path = Path::new(dir);
+    let target_dir = arg.value_of("TARGET").context("No mount point")?;
+
+    let mount_path = Path::new(target_dir);
     if !mount_path.exists() {
-        return Err(anyhow!("Root/mount point path {} does not exist", dir));
+        return Err(anyhow!("Mount point {} does not exist", target_dir));
     }
     if !mount_path.is_dir() {
-        return Err(anyhow!("Root/mount point path {} is not a directory", dir));
+        return Err(anyhow!("Mount point {} is not a directory", target_dir));
     }
-    let absolute_mount_path = fs::canonicalize(mount_path)
-        .context(format!("Failed to canonicalize mount path of {}", dir))?;
+    let source_dir = fs::canonicalize(source_dir).context(format!(
+        "Failed to canonicalize source dir of {}",
+        source_dir
+    ))?;
+
+    let target_dir = fs::canonicalize(target_dir).context(format!(
+        "Failed to canonicalize mount point of {}",
+        target_dir
+    ))?;
 
     let mount_fd = fcntl::open(
-        &absolute_mount_path,
+        &source_dir,
         fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY,
         stat::Mode::empty(),
     )
-    .context(format!("Failed to open directory {}", dir))?;
+    .context(format!("Failed to open directory {:?}", source_dir))?;
 
     let mut base_log_config = fern::Dispatch::new();
     base_log_config = match value_t!(arg, "LOGLEVEL", LogLevel).context("Could not get loglevel")? {
@@ -104,7 +121,8 @@ fn main() -> Result<()> {
         background().context("failed to daemonize")?;
     }
 
-    info!("Absolute mount/root dir: {:?}", absolute_mount_path);
+    info!("Source dir: {:?}", source_dir);
+    info!("Mount point: {:?}", target_dir);
 
     let fuse = FS::new(mount_fd);
 
@@ -118,8 +136,8 @@ fn main() -> Result<()> {
     }));
 
     match fuse_mt::mount(
-        fuse_mt::FuseMT::new(fuse, 1),
-        &absolute_mount_path,
+        fuse_mt::FuseMT::new(fuse, 16),
+        &target_dir,
         &[
             &OsString::from("-o"),
             &OsString::from("nonempty"),
