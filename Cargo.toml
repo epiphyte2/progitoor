@@ -7,11 +7,11 @@ edition = "2018"
 license = "GPL-3.0"
 authors = ["Edwin Peer <edwin@epiphyte2.co>", "Simeon Miteff <simeon@epiphyte2.co>" ]
 readme = "README.md"
-description = "Think of something clever to say here (comes from Cargo.toml)"
-# repository = "https://github.com/"
-# documentation = "https://docs.rs/"
-# keywords = []
-# categories = ["command-line-utilities"]
+description = "progitoor is an overlay filesystem that stores ownership and other file metadata in a text database and presents that view to processes running as root, while the actual files are user-owned and can be versioned in git."
+documentation = "https://docs.rs/progitoor"
+# repository = "https://github.com/epiphyte2/progitoor"
+keywords = ["overlay", "git", "bindroot", "filesystem", "fuse"]
+categories = ["filesystem", "development-tools", "command-line-utilities", "embedded"]
 
 [dependencies]
 fuse_mt = "0.5.1"
