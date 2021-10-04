@@ -62,6 +62,7 @@ fn underlay_mode(mode: u32) -> libc::mode_t {
     mode as libc::mode_t & !(libc::S_ISUID | libc::S_ISGID | libc::S_ISVTX) | libc::S_IWUSR
 }
 
+#[allow(clippy::redundant_field_names)]
 fn result_entry(mapping: FileInfo, result: Result<stat::FileStat, nix::Error>) -> ResultEntry {
     match result {
         Ok(stat) => {
@@ -211,7 +212,7 @@ impl FS {
 
     fn update<F, G>(&self, path: &Path, updater: F, initializer: G) -> ResultEmpty
     where
-        F: FnOnce(&mut FileInfo) -> (),
+        F: FnOnce(&mut FileInfo),
         G: FnOnce() -> Option<FileInfo>,
     {
         match self.metadata.update(path, updater, initializer) {
@@ -284,14 +285,8 @@ impl FilesystemMT for FS {
         gid: Option<u32>,
     ) -> ResultEmpty {
         let path = relative_path(path);
-        let uid = match uid {
-            Some(uid) => Some(unistd::Uid::from_raw(uid as libc::uid_t)),
-            None => None,
-        };
-        let gid = match gid {
-            Some(gid) => Some(unistd::Gid::from_raw(gid as libc::gid_t)),
-            None => None,
-        };
+        let uid = uid.map(|uid| unistd::Uid::from_raw(uid as libc::uid_t));
+        let gid = gid.map(|gid| unistd::Gid::from_raw(gid as libc::gid_t));
         let req_uid = unistd::Uid::from_raw(req.uid as libc::uid_t);
         let req_gid = unistd::Gid::from_raw(req.gid as libc::gid_t);
         if req_uid != self.owner.uid || req_gid != self.owner.gid {

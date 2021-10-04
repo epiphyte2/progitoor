@@ -28,7 +28,7 @@ fn background(mut ready: UnnamedPipeReader) -> std::result::Result<(), Daemonize
         println!("Foreground process waiting for mount...");
         let mut buffer = [0; 0];
         ready
-            .read(&mut buffer[..])
+            .read_exact(&mut buffer[..])
             .expect("Receiving on ready channel failed");
         println!("Foreground process waiting for 2s...");
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -145,10 +145,10 @@ fn main() -> Result<()> {
         let user_options = arg
             .value_of("MOUNT_OPT")
             .context("Problem getting mount options")?;
-        if user_options != "" {
+        if !user_options.is_empty() {
             fuse_options.extend(
                 user_options
-                    .split(",")
+                    .split(',')
                     .filter(|x| !default_fuse_options.contains(x))
                     .flat_map(|x| [OsStr::new("-o"), OsStr::new(x)]),
             );

@@ -54,9 +54,9 @@ pub struct FileInfo {
 /// ZERO_FILE_INFO is used to write tombstones to the journal
 const ZERO_FILE_INFO: FileInfo = FileInfo {
     time: Some(Timespec { sec: 0, nsec: 0 }),
-    mode: Some(0 as libc::mode_t),
-    uid: Some(unistd::Uid::from_raw(0 as libc::uid_t)),
-    gid: Some(unistd::Gid::from_raw(0 as libc::gid_t)),
+    mode: Some(0_u32),
+    uid: Some(unistd::Uid::from_raw(0_u32)),
+    gid: Some(unistd::Gid::from_raw(0_u32)),
 };
 
 /// FileEntry is a name, info tuple
@@ -65,19 +65,18 @@ pub struct FileEntry {
     pub info: FileInfo,
 }
 
-// FIXME: clippy says: an implementation of `From` is preferred since it gives you `Into<_>` for free where the reverse isn't true
-
 /// Serialise a FileEntry to a String
-impl Into<String> for &FileEntry {
-    fn into(self) -> String {
+#[allow(clippy::or_fun_call)]
+impl From<&FileEntry> for String {
+    fn from(entry: &FileEntry) -> Self {
         format!(
             "{:04x} {:04x} {:04x} {:09x} {:08x} {}",
-            self.info.mode.unwrap_or_default(),
-            self.info.uid.unwrap_or(unistd::Uid::from_raw(0)).as_raw(),
-            self.info.gid.unwrap_or(unistd::Gid::from_raw(0)).as_raw(),
-            self.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).sec,
-            self.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).nsec,
-            self.name.to_str().unwrap(), // FIXME this might be a bad idea
+            entry.info.mode.unwrap_or_default(),
+            entry.info.uid.unwrap_or(unistd::Uid::from_raw(0)).as_raw(),
+            entry.info.gid.unwrap_or(unistd::Gid::from_raw(0)).as_raw(),
+            entry.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).sec,
+            entry.info.time.unwrap_or(Timespec { sec: 0, nsec: 0 }).nsec,
+            entry.name.to_str().unwrap(), // FIXME this might be a bad idea
         )
     }
 }
@@ -96,7 +95,7 @@ impl TryFrom<&str> for FileEntry {
         //
         // In the journal, if <mode> is 0000 - it is a tombstone.
 
-        let parts: Vec<&str> = value.splitn(6, " ").collect();
+        let parts: Vec<&str> = value.splitn(6, ' ').collect();
         if parts.len() != 6 {
             return Err(MetadataError::FileInfoParsingError);
         }
@@ -145,6 +144,7 @@ impl Store {
     }
 
     /// Construct a Store instance that doesn't start a periodic flusher thread
+    #[allow(clippy::redundant_field_names)]
     pub fn new_without_flusher_thread(root: RawFd) -> Result<Self, MetadataError> {
         let mut store = Self {
             map: Arc::new(RwLock::new(BTreeMap::new())),
@@ -166,7 +166,7 @@ impl Store {
     /// Start the periodic flusher thread
     fn start_flusher_thread(&self) {
         let thread_map = Arc::clone(&self.map);
-        let thread_root = self.root.clone();
+        let thread_root = self.root;
         let thread_flag = self.flusher_thread_run.clone();
 
         log::info!("Periodic flusher thread starting");
@@ -226,7 +226,7 @@ impl Store {
     /// Look up file metadata
     pub fn get(&self, name: &Path) -> Option<FileInfo> {
         if let Some(file_info_ref) = self.map.read().unwrap().get(&name.to_path_buf()) {
-            return Some(file_info_ref.clone());
+            return Some(*file_info_ref);
         }
 
         None
@@ -234,7 +234,7 @@ impl Store {
 
     pub fn update<F, G>(&self, name: &Path, updater: F, initializer: G) -> Result<(), MetadataError>
     where
-        F: FnOnce(&mut FileInfo) -> (),
+        F: FnOnce(&mut FileInfo),
         G: FnOnce() -> Option<FileInfo>,
     {
         let mut map = match self.map.write() {
@@ -245,7 +245,7 @@ impl Store {
             Entry::Occupied(mut e) => {
                 let mut info = e.get_mut();
                 updater(&mut info);
-                info.clone()
+                *info
             }
             Entry::Vacant(e) => {
                 let info = initializer();
@@ -267,7 +267,7 @@ impl Store {
     /// Walks the metadata store calling the visitor for each entry
     pub fn walk<F>(&self, visitor: F) -> Result<(), MetadataError>
     where
-        F: Fn(&Path, &FileInfo) -> (),
+        F: Fn(&Path, &FileInfo),
     {
         let map = self.map.read().unwrap();
         for (k, v) in map.iter() {
@@ -289,7 +289,7 @@ impl Store {
             name: name.to_path_buf(),
             info,
         };
-        Ok(self.journal(&entry)?)
+        self.journal(&entry)
     }
 
     /// Delete file metadata
