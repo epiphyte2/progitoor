@@ -10,12 +10,13 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::process::exit;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{
     arg_enum, crate_authors, crate_description, crate_name, crate_version, value_t, App, Arg,
 };
-use daemonize::{Daemonize, DaemonizeError};
+use daemonize::{Daemonize, Outcome};
 use interprocess::unnamed_pipe::{pipe, UnnamedPipeReader};
 use nix::fcntl;
 use nix::sys::stat;
@@ -23,19 +24,23 @@ use log::{error, info};
 
 use progitoor::filesystem::FS;
 
-fn background(mut ready: UnnamedPipeReader) -> std::result::Result<(), DaemonizeError> {
-    let daemonize = Daemonize::new().exit_action(move || {
-        println!("Foreground process waiting for mount...");
-        let mut buffer = [0; 0];
-        ready
-            .read_exact(&mut buffer[..])
-            .expect("Receiving on ready channel failed");
-        println!("Foreground process waiting for 2s...");
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        println!("Foreground process exiting.");
-    });
-
-    daemonize.start()
+fn background(mut ready: UnnamedPipeReader) -> std::result::Result<(), daemonize::Error> {
+    match Daemonize::new().execute() {
+        Outcome::Parent(Ok(_)) => {
+            println!("Foreground process waiting for mount...");
+            let mut buffer = [0; 0];
+            ready
+                .read_exact(&mut buffer[..])
+                .expect("Receiving on ready channel failed");
+            println!("Foreground process waiting for 2s...");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            println!("Foreground process exiting.");
+            exit(0);
+        },
+        Outcome::Parent(Err(e)) => Err(e),
+        Outcome::Child(Ok(_)) => Ok(()),
+        Outcome::Child(Err(e)) => Err(e),
+    }
 }
 
 arg_enum! {

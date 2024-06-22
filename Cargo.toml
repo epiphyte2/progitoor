@@ -22,7 +22,7 @@ thiserror = "1.0"
 tempfile = "3"
 clap = "2"
 anyhow = "1.0"
-daemonize = "0.4.1"
+daemonize = "0.5"
 log = "0.4"
 fern = { version = "0.6", features = ["syslog-3"] }
 syslog = "3"
